@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: talk-to-the-bible-backend
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: google/gemini-2.5-flash
+      - key: OPENROUTER_MAX_TOKENS
+        value: "450"
+      - key: OPENROUTER_SITE_URL
+        value: https://thewayversion.com
+      - key: OPENROUTER_SITE_NAME
+        value: Talk To The Bible
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: MAX_DAILY_REQUESTS
+        value: "30"
+      - key: THE_WAY_BASE_URL
+        value: https://thewayversion.com
+      - key: KJV_API_BASE_URL
+        value: https://bible-api.com
