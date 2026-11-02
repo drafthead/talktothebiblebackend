@@ -18,7 +18,33 @@ function requestKey(request, input) { const supplied = String(request.headers["x
 function usageFor(key) { const date = new Date().toISOString().slice(0, 10); const record = daily.get(key); if (!record || record.date !== date) { const fresh = { date, count: 0 }; daily.set(key, fresh); return fresh; } return record; }
 function parseBody(text) { try { return JSON.parse(text || "{}"); } catch { return null; } }
 async function readBody(request) { let body = ""; for await (const chunk of request) { body += chunk; if (body.length > 160000) throw new Error("Request too large"); } return body; }
-function parseModelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return { mode: "conversation", answer: text, verses: [], status: "" }; } }
+function parseModelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return { mode: "conversation", verses: [], status: "" }; } }
+
+const factStatuses = new Set([
+  "Biblical status: Explicitly stated in Scripture",
+  "Biblical status: Inferred from Scripture",
+  "Biblical status: Traditional or scholarly estimate—not explicitly stated in Scripture",
+  "Biblical status: Disputed interpretation",
+  "Biblical status: Not specified in Scripture",
+]);
+
+function normalizedQuote(value) {
+  return String(value || "").toLowerCase().replace(/[“”‘’]/g, "'").replace(/[^a-z0-9']+/g, " ").trim();
+}
+
+function onlyVerifiedVerseMaterial(verses) {
+  const seenReferences = new Set();
+  return verses.flatMap((verse) => {
+    const reference = String(verse.reference || "").trim();
+    if (!reference || seenReferences.has(reference.toLowerCase())) return [];
+    seenReferences.add(reference.toLowerCase());
+    const fragment = String(verse.fragment || "").trim();
+    const normalizedFragment = normalizedQuote(fragment);
+    const exactFragment = normalizedFragment && normalizedQuote(verse.text).includes(normalizedFragment) ? fragment : "";
+    // Notes can become a second, unsourced assistant answer. Never return them.
+    return [{ reference, text: String(verse.text || "").trim(), fragment: exactFragment }];
+  }).filter((verse) => verse.text);
+}
 
 async function chat(input, request) {
   if (!process.env.OPENROUTER_API_KEY) return { status: 503, body: { error: "OpenRouter is not configured yet." } };
@@ -38,10 +64,29 @@ async function chat(input, request) {
   const upstream = await response.json().catch(() => ({}));
   if (!response.ok) return { status: response.status, body: { error: upstream?.error?.message || "The Bible service could not answer right now." } };
   const generated = parseModelContent(upstream?.choices?.[0]?.message?.content);
-  const verses = await enrichVerses(generated.verses, translation);
+  let verses = onlyVerifiedVerseMaterial(await enrichVerses(generated.verses, translation));
+  // A malformed model answer must not turn into a prose answer or a blank card.
+  // This fallback remains entirely Scripture and is intentionally predictable.
+  if (!verses.length) {
+    verses = onlyVerifiedVerseMaterial(await enrichVerses([{ reference: "Psalm 119:105" }], translation));
+  }
   usage.count += 1;
   const remaining = Math.max(0, limit - usage.count);
-  return { status: 200, body: { mode: generated.mode === "fact" ? "fact" : "conversation", answer: String(generated.answer || "Here are Bible verses for this moment.").slice(0, 2500), verses, status: generated.mode === "fact" ? String(generated.status || "Biblical status: Not specified in Scripture").slice(0, 300) : "", translation, model: upstream.model || model, remaining } };
+  const mode = generated.mode === "fact" ? "fact" : "conversation";
+  const status = mode === "fact" && factStatuses.has(String(generated.status || ""))
+    ? String(generated.status)
+    : mode === "fact" ? "Biblical status: Not specified in Scripture" : "";
+  // The UI composes its Cipher strips from verified fragments. Do not pass the
+  // model's natural-language answer through, even if it sounds polished.
+  return { status: 200, body: { mode, answer: "", verses, status, translation, model: upstream.model || model, remaining } };
+}
+
+async function resolveVerses(input) {
+  const translation = input.translation === "twb" ? "twb" : "kjv";
+  const references = Array.isArray(input.references) ? input.references.filter((reference) => typeof reference === "string").slice(0, 12) : [];
+  if (!references.length) return { status: 400, body: { error: "At least one Bible reference is required." } };
+  const verses = await enrichVerses(references.map((reference) => ({ reference })), translation);
+  return { status: 200, body: { translation, verses } };
 }
 
 const server = createServer(async (request, response) => {
@@ -49,11 +94,11 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (request.method === "GET" && url.pathname === "/health") { sendJson(request, response, 200, { ok: true, service: "talk-to-the-bible-backend", model: process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash" }); return; }
   if (request.method === "GET" && url.pathname === "/") { sendJson(request, response, 200, { service: "talk-to-the-bible-backend", chat: "/api/chat", health: "/health" }); return; }
-  if (request.method !== "POST" || url.pathname !== "/api/chat") { sendJson(request, response, 404, { error: "Not found" }); return; }
+  if (request.method !== "POST" || !["/api/chat", "/api/verses"].includes(url.pathname)) { sendJson(request, response, 404, { error: "Not found" }); return; }
   try {
     const input = parseBody(await readBody(request));
     if (!input) { sendJson(request, response, 400, { error: "Invalid request." }); return; }
-    const result = await chat(input, request);
+    const result = url.pathname === "/api/verses" ? await resolveVerses(input) : await chat(input, request);
     sendJson(request, response, result.status, result.body);
   } catch (error) { sendJson(request, response, error.message === "Request too large" ? 413 : 500, { error: error.message === "Request too large" ? error.message : "The Bible service could not process this request." }); }
 });

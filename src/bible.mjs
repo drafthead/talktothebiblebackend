@@ -1,3 +1,6 @@
+import { access, readFile } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
+
 const wayCache = new Map();
 const BOOK_ALIASES = new Map([["psalm", "psalms"], ["song of songs", "song-of-solomon"], ["song of solomon", "song-of-solomon"]]);
 
@@ -27,8 +30,16 @@ async function resolveKjv(reference) {
 
 async function getWayBook(slug) {
   if (!wayCache.has(slug)) {
-    const base = process.env.THE_WAY_BASE_URL || "https://thewayversion.com";
-    wayCache.set(slug, fetchJson(`${base.replace(/\/$/, "")}/app/data/books/${slug}.json`));
+    wayCache.set(slug, (async () => {
+      const localPath = resolvePath(process.cwd(), "data", "way", "books", `${slug}.json`);
+      try {
+        await access(localPath);
+        return JSON.parse(await readFile(localPath, "utf8"));
+      } catch {
+        const base = process.env.THE_WAY_BASE_URL || "https://thewayversion.com";
+        return fetchJson(`${base.replace(/\/$/, "")}/app/data/books/${slug}.json`);
+      }
+    })());
   }
   try { return await wayCache.get(slug); } catch (error) { wayCache.delete(slug); throw error; }
 }

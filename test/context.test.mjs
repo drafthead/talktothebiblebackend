@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compactConversation, sanitizeMessages } from "../src/context.mjs";
+import { buildUserMemory, compactConversation, sanitizeMessages } from "../src/context.mjs";
 import { parseReference } from "../src/bible.mjs";
 
 test("compacts older turns but keeps the newest conversation turns", () => {
@@ -18,4 +18,16 @@ test("sanitizes message roles and caps the request history", () => {
 
 test("parses Bible references with optional verse ranges", () => {
   assert.deepEqual(parseReference("1 John 4:7-8"), { book: "1 John", chapter: 4, start: 7, end: 8 });
+});
+
+test("builds bounded personal context categories without another model call", () => {
+  const memory = buildUserMemory([
+    { role: "user", content: "I am worried about work and my partner." },
+    { role: "assistant", content: "A verse" },
+    { role: "user", content: "I prefer traditional language." }
+  ]);
+  assert.match(memory, /Situations:/);
+  assert.match(memory, /Relationships:/);
+  assert.match(memory, /Concerns:/);
+  assert.match(memory, /Preferences:/);
 });
