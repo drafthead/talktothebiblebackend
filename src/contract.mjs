@@ -14,6 +14,12 @@ export function normalizedQuote(value) {
     .trim();
 }
 
+/** Normalize common model variants before a reference reaches the UI. */
+export function canonicalReference(value) {
+  const reference = String(value || '').replace(/\s+/g, ' ').trim();
+  return reference.replace(/^\d+\s+(psalm|psalms)\b/i, 'Psalms');
+}
+
 function fallbackFragment(text) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
   if (!clean) return "";
@@ -28,7 +34,7 @@ function fallbackFragment(text) {
  */
 export function verifyVerseMaterial(verses, { allowWholeVerseFallback = true, maxSegments = 12 } = {}) {
   const verified = (Array.isArray(verses) ? verses : []).slice(0, maxSegments).flatMap((verse) => {
-    const reference = String(verse?.reference || "").trim();
+    const reference = canonicalReference(verse?.reference);
     const text = String(verse?.text || "").replace(/\s+/g, " ").trim();
     if (!reference || !text) return [];
     const requested = String(verse?.fragment || "").trim();

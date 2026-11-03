@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { verifyVerseMaterial } from "../src/contract.mjs";
+import { canonicalReference, verifyVerseMaterial } from "../src/contract.mjs";
+
+test("canonicalizes Psalm references before they reach the UI", () => {
+  assert.equal(canonicalReference("1 Psalm 147:3"), "Psalms 147:3");
+  assert.equal(canonicalReference(" Psalms   147:3 "), "Psalms 147:3");
+});
 
 test("removes duplicate and nested fragments but keeps distinct same-verse fragments", () => {
   const result = verifyVerseMaterial([

@@ -5,8 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
-OPENROUTER_MODEL = "openai/gpt-4.1-mini"
-OPENROUTER_MAX_TOKENS = "450"
+OPENROUTER_MODEL = "openai/gpt-4.1"
+OPENROUTER_MAX_TOKENS = "700"
 OPENROUTER_SITE_URL = "https://thewayversion.com"
 OPENROUTER_SITE_NAME = "Talk To The Bible"
 ALLOWED_ORIGINS = "*"

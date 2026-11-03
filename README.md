@@ -1,7 +1,8 @@
 # Talk To The Bible backend
 
-This is the small Render service used by the Talk To The Bible web and Expo
-clients. It keeps the OpenRouter credential on the server, applies the
+This is the Cloudflare Worker/D1 service used by the Talk To The Bible web and Expo
+clients. Render files remain only as a rollback path; production clients point at
+the Worker URL in `public/config.js` and `mobile/app.json`. It keeps the OpenRouter credential on the server, applies the
 verse-only response contract, compacts older chat turns,
 resolves verse text from the selected translation, and exposes:
 
@@ -9,7 +10,8 @@ resolves verse text from the selected translation, and exposes:
 - `POST /api/chat`
 - `POST /api/verses` for switching displayed verse text between KJV and The Way Version
 
-The request body is `{ translation: "kjv" | "twb", device_id, session_id, plus, messages }`.
+The request body is `{ translation: "kjv" | "twb", device_id, session_id, plus, summary, profile_context, recent_messages }`.
+Clients send the latest three user/assistant turns exactly and a bounded summary of older turns. The Worker also compacts legacy `messages` requests for older clients.
 The response contains resolved verses, translation, model, and the direct-question
 evidence status when needed. The `answer` field is intentionally empty: the
 client renders authentic Scripture tiles and verified citation bubbles rather
@@ -31,30 +33,47 @@ book is unavailable, it falls back to
 `https://thewayversion.com/app/data/books/<book>.json`. Both source URLs are
 configurable.
 
-## Render
+## Production deployment: Cloudflare Worker + D1
 
-Create a Node web service from `drafthead/talktothebiblebackend` with:
+Production clients use `https://talk-to-the-bible-api.focus-and-chill-media-server.workers.dev`.
+The Worker keeps `OPENROUTER_API_KEY` server-side, resolves KJV and The Way
+Version text, stores usage and chat context in D1, and is the supported
+deployment path. The older Render Node service remains only as a rollback or
+local reference path; do not point new clients at it.
 
-- Build command: `npm install`
-- Start command: `npm start`
-- Health check: `/health`
+From `cloudflare/`:
 
-Set `OPENROUTER_API_KEY` in Render Environment as a secret. The key is never
-sent to the browser. `render.yaml` provides the safe defaults and asks Render
-for the secret during Blueprint setup. Optional settings include
-`OPENROUTER_MODEL`, `OPENROUTER_MAX_TOKENS`, `ALLOWED_ORIGINS`, and
-`MAX_DAILY_REQUESTS`.
+```bash
+npx wrangler login
+npx wrangler d1 execute talk-to-the-bible-db --remote --file=schema.sql
+npx wrangler secret put OPENROUTER_API_KEY
+npx wrangler deploy
+```
+
+The live health check reports the configured model and storage binding. Keep
+`OPENROUTER_MODEL`, `OPENROUTER_MAX_TOKENS`, `ALLOWED_ORIGINS`, and daily limits
+in `wrangler.toml`; never put the OpenRouter key in the web or mobile bundle.
 
 ## Model choice
 
-The default is `openai/gpt-4.1-mini`: it is a strong structured-output model
-with a large context window and a lower-cost profile than flagship reasoning
-models. Keep the model configurable through `OPENROUTER_MODEL` and benchmark
-any replacement against the golden tests before changing production.
+The default production model is `openai/gpt-4.1`: it is stronger at instruction following and factual synthesis than the former mini default, while remaining far cheaper than a flagship reasoning model. OpenRouter lists GPT-4.1 at $2/M input and $8/M output tokens, with cached input priced lower. Keep the model configurable through `OPENROUTER_MODEL` and benchmark any replacement against the golden tests before changing production.
 The model is never trusted as the Bible source: it selects references and
 fragments, then the backend resolves the exact KJV or The Way Version text and
 checks every fragment as a contiguous substring. Change the model only through
 `OPENROUTER_MODEL` so rollback is one environment-variable change.
+
+### Model evaluation note
+
+The production choice was tested against direct facts (Jesus' age, Michael),
+real-life concerns, longer multi-part relationship questions, greetings, and
+follow-up questions with recent citations. Nemotron 3.5 Lightning, DeepSeek
+V4 Flash, Qwen3 235B, Gemini Flash, and GPT-4.1 mini/nano were all less
+consistent: they either returned a generic fallback, misclassified a fact, or
+ignored the fragment/status contract. GPT-4.1 was the only tested option that
+reliably passed the full set. It costs more per token, but the request is kept
+small with a bounded summary, the last three turns, exact verse retrieval, and
+a 700-token response cap. Re-run the same golden prompts before switching to a
+cheaper model.
 
 ## Context compaction and cost control
 
@@ -63,7 +82,7 @@ turns exact,
 and turns older user turns into bounded categories for situations, relationships,
 concerns, preferences, and general life context. It does not call a second
 summarizer model, so compaction adds no extra model request. Responses are
-capped at 450 tokens by default, and the backend enforces 30 anonymous answers
+capped at 700 tokens by default, and the backend enforces 30 anonymous answers
 per day. The frontend also shows and persists the same 30-answer daily budget.
 
 Each request can also carry a bounded device-level profile context collected
