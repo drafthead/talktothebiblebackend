@@ -33,7 +33,7 @@ test("builds bounded personal context categories without another model call", ()
   assert.match(memory, /Preferences:/);
 });
 
-test("keeps duplicate references so tiles and citation bubbles remain one-to-one", () => {
+test("keeps distinct fragments from the same reference for separate tiles", () => {
   const result = verifyVerseMaterial([
     { reference: "Genesis 3:20", text: "And Adam called his wife's name Eve; because she was the mother of all living.", fragment: "Eve" },
     { reference: "Genesis 3:20", text: "And Adam called his wife's name Eve; because she was the mother of all living.", fragment: "was" },
