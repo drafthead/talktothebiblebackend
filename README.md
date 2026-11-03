@@ -81,14 +81,14 @@ security boundary.
 
 ## Scripture Cipher contract
 
-For every non-safety response, the model supplies an ordered list of short
-source fragments. The frontend renders exactly one rectangular tile per item,
-then exactly one citation bubble per item in the same order. Duplicate
-references are preserved intentionally; ten tiles require ten bubbles even if
-several come from one verse. The server rejects unresolved references and
-non-contiguous fragments, and falls back to one authentic verse if the model
-response cannot be verified. Citation taps open the full verse; the tile itself
-never becomes a second prose answer.
+For every non-safety response, the model supplies an ordered list of short,
+source-backed fragments. The frontend renders one rectangular tile per
+fragment, then one canonical citation bubble for each distinct reference.
+Multiple genuinely different fragments from the same reference are allowed,
+but duplicate or nested repeats are removed by the verification layer. The
+server rejects unresolved references and non-contiguous fragments, and falls
+back to one authentic verse if the model response cannot be verified. Citation
+taps open the full verse; the tile itself never becomes a second prose answer.
 
 Direct biblical fact questions additionally return one of the five controlled
 `Biblical status` labels plus an optional short `statusNote`. This is rendered
