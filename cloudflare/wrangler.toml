@@ -1,0 +1,25 @@
+name = "talk-to-the-bible-api"
+main = "worker.mjs"
+compatibility_date = "2026-11-03"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+OPENROUTER_MODEL = "openai/gpt-4.1-mini"
+OPENROUTER_MAX_TOKENS = "450"
+OPENROUTER_SITE_URL = "https://thewayversion.com"
+OPENROUTER_SITE_NAME = "Talk To The Bible"
+ALLOWED_ORIGINS = "*"
+MAX_DAILY_REQUESTS = "30"
+PLUS_DAILY_REQUESTS = "1000"
+THE_WAY_BASE_URL = "https://thewayversion.com"
+KJV_API_BASE_URL = "https://bible-api.com"
+
+# Run `wrangler d1 create talk-to-the-bible-db`, then replace the placeholder
+# below before the first deploy. The OpenRouter key is a Worker secret, not a
+# value in this file: `wrangler secret put OPENROUTER_API_KEY`.
+[[d1_databases]]
+binding = "BIBLE_DB"
+database_name = "talk-to-the-bible-db"
+database_id = "07dd9d32-bead-4b03-a522-867a01762366"
+migrations_dir = "migrations"

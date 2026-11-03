@@ -22,11 +22,12 @@ function fallbackFragment(text) {
 
 /**
  * Verify model-selected material after the verse text has been resolved.
- * Duplicate references are intentionally preserved: tile count and citation
- * count must stay one-to-one, even when several tiles use one verse.
+ * Distinct fragments from the same verse are allowed so the UI can compose a
+ * connected answer, but exact duplicates and a shorter phrase already
+ * contained in a longer fragment are redundant and are removed.
  */
 export function verifyVerseMaterial(verses, { allowWholeVerseFallback = true, maxSegments = 12 } = {}) {
-  return (Array.isArray(verses) ? verses : []).slice(0, maxSegments).flatMap((verse) => {
+  const verified = (Array.isArray(verses) ? verses : []).slice(0, maxSegments).flatMap((verse) => {
     const reference = String(verse?.reference || "").trim();
     const text = String(verse?.text || "").replace(/\s+/g, " ").trim();
     if (!reference || !text) return [];
@@ -41,6 +42,13 @@ export function verifyVerseMaterial(verses, { allowWholeVerseFallback = true, ma
       fragment,
       note: "",
     }];
+  });
+  const seen = new Set();
+  return verified.filter((verse, index) => {
+    const key = `${verse.reference}\u0000${normalizedQuote(verse.fragment)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return !verified.some((other, otherIndex) => otherIndex !== index && other.reference === verse.reference && normalizedQuote(other.fragment).length > normalizedQuote(verse.fragment).length && normalizedQuote(other.fragment).includes(normalizedQuote(verse.fragment)));
   });
 }
 

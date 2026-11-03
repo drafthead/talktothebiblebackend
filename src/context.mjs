@@ -1,8 +1,12 @@
-export function compactConversation(messages) {
-  const recentStart = messages.length % 2 === 1 ? Math.max(0, messages.length - 9) : Math.max(0, messages.length - 8);
+export function compactConversation(messages, profileContext = "") {
+  // Keep the last three user/assistant turns exact. Older turns are reduced to
+  // bounded categories so a long chat does not grow the prompt forever.
+  const recentStart = Math.max(0, messages.length - 6);
   const recent = messages.slice(recentStart);
   const older = messages.slice(0, recentStart);
-  const memory = buildUserMemory(older);
+  const localMemory = buildUserMemory(older);
+  const globalMemory = String(profileContext || "").replace(/\s+/g, " ").trim().slice(0, 3200);
+  const memory = [globalMemory && `Global user context (use only as background): ${globalMemory}`, localMemory].filter(Boolean).join("\n").slice(0, 4200);
   return { memory, recent };
 }
 

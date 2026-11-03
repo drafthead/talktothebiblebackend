@@ -9,7 +9,7 @@ resolves verse text from the selected translation, and exposes:
 - `POST /api/chat`
 - `POST /api/verses` for switching displayed verse text between KJV and The Way Version
 
-The request body is `{ translation: "kjv" | "twb", session_id, messages }`.
+The request body is `{ translation: "kjv" | "twb", device_id, session_id, plus, messages }`.
 The response contains resolved verses, translation, model, and the direct-question
 evidence status when needed. The `answer` field is intentionally empty: the
 client renders authentic Scripture tiles and verified citation bubbles rather
@@ -47,10 +47,10 @@ for the secret during Blueprint setup. Optional settings include
 
 ## Model choice
 
-The safe default is `google/gemini-2.5-flash`. The November 3, 2026 product
-spec identifies `anthropic/claude-sonnet-5.5` as the quality baseline and
-`google/gemini-3.8-flash` as the lower-cost challenger; benchmark those exact
-OpenRouter IDs against the golden tests before changing Render's environment.
+The default is `openai/gpt-4.1-mini`: it is a strong structured-output model
+with a large context window and a lower-cost profile than flagship reasoning
+models. Keep the model configurable through `OPENROUTER_MODEL` and benchmark
+any replacement against the golden tests before changing production.
 The model is never trusted as the Bible source: it selects references and
 fragments, then the backend resolves the exact KJV or The Way Version text and
 checks every fragment as a contiguous substring. Change the model only through
@@ -58,16 +58,26 @@ checks every fragment as a contiguous substring. Change the model only through
 
 ## Context compaction and cost control
 
-The service validates and trims each message, keeps the newest 8–9 turns exact,
+The service validates and trims each message, keeps the newest three user/assistant
+turns exact,
 and turns older user turns into bounded categories for situations, relationships,
 concerns, preferences, and general life context. It does not call a second
 summarizer model, so compaction adds no extra model request. Responses are
 capped at 450 tokens by default, and the backend enforces 30 anonymous answers
 per day. The frontend also shows and persists the same 30-answer daily budget.
 
-This anonymous limit is appropriate for the current test build. Before a public
-launch, replace the in-memory counter with authenticated user IDs plus durable
-storage/Redis, and connect the Plus purchase to a server-verified entitlement.
+Each request can also carry a bounded device-level profile context collected
+from the user's saved chats. The Worker persists that profile in D1 so a new
+chat can use it as background without replaying every old conversation. The
+current design deliberately does not cite profile context; only verified verse
+fragments appear in the answer. A future summarizer can update the profile
+asynchronously, but should never replace the exact recent turns.
+
+Free accounts receive 30 answers per day. Plus displays “Unlimited chats” and
+uses a 1,000-answer soft limit per day (`PLUS_DAILY_REQUESTS`) to prevent abuse.
+The native client passes its device identifier and Plus state; production
+entitlement verification should be added before treating the client flag as a
+security boundary.
 
 ## Scripture Cipher contract
 
@@ -97,3 +107,27 @@ examples.
 ```bash
 npm test
 ```
+
+## Cloudflare Worker + D1
+
+The `cloudflare/` directory is the production-shaped Worker version. It keeps
+the OpenRouter secret server-side, resolves both translations, logs each user
+and assistant turn, stores daily usage, and keeps the same verse verification
+contract as the Render service.
+
+```bash
+cd cloudflare
+npx wrangler login
+npx wrangler d1 create talk-to-the-bible-db
+# Put the returned database_id in wrangler.toml.
+npx wrangler d1 execute talk-to-the-bible-db --remote --file=schema.sql
+npx wrangler secret put OPENROUTER_API_KEY
+npx wrangler deploy
+```
+
+Point the web and mobile clients at the deployed Worker `/api/chat` and
+`/api/verses` URLs. The Render service remains a rollback path until the Worker
+health endpoint and a real chat request have been verified. Never put the
+OpenRouter key, Apple/Google service credentials, or database passwords in Git
+or Google Docs; store them in Cloudflare Worker Secrets and the relevant store
+secret manager.

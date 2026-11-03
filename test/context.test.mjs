@@ -7,7 +7,7 @@ import { normalizeModelResponse, verifyVerseMaterial } from "../src/contract.mjs
 test("compacts older turns but keeps the newest conversation turns", () => {
   const messages = Array.from({ length: 14 }, (_, index) => ({ role: index % 2 ? "assistant" : "user", content: `turn-${index}` }));
   const result = compactConversation(messages);
-  assert.equal(result.recent.length, 8);
+  assert.equal(result.recent.length, 6);
   assert.match(result.memory, /turn-0/);
   assert.match(result.recent.at(-1).content, /turn-13/);
 });
