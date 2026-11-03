@@ -59,12 +59,12 @@ export async function resolveVerse(reference, translation) {
 }
 
 export async function enrichVerses(verses, translation) {
-  const safeVerses = Array.isArray(verses) ? verses.slice(0, 4) : [];
+  const safeVerses = Array.isArray(verses) ? verses.slice(0, 12) : [];
   return (await Promise.all(safeVerses.map(async (verse) => {
     const reference = String(verse?.reference || "").trim().slice(0, 120);
     if (!reference) return null;
     const resolved = await resolveVerse(reference, translation);
     if (!resolved) return null;
-    return { reference: resolved.reference, text: resolved.text, fragment: String(verse?.fragment || "").trim().slice(0, 500), note: String(verse?.note || "").trim().slice(0, 240) };
+    return { reference: resolved.reference, text: resolved.text, fragment: String(verse?.fragment || "").trim().slice(0, 500), note: "" };
   }))).filter(Boolean);
 }

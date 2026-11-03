@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { compactConversation, sanitizeMessages } from "./src/context.mjs";
 import { enrichVerses } from "./src/bible.mjs";
 import { promptForTranslation } from "./src/rules.mjs";
+import { normalizeModelResponse, verifyVerseMaterial } from "./src/contract.mjs";
 
 const port = Number(process.env.PORT || 10000);
 const openRouterUrl = "https://openrouter.ai/api/v1/chat/completions";
@@ -20,32 +21,6 @@ function parseBody(text) { try { return JSON.parse(text || "{}"); } catch { retu
 async function readBody(request) { let body = ""; for await (const chunk of request) { body += chunk; if (body.length > 160000) throw new Error("Request too large"); } return body; }
 function parseModelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return { mode: "conversation", verses: [], status: "" }; } }
 
-const factStatuses = new Set([
-  "Biblical status: Explicitly stated in Scripture",
-  "Biblical status: Inferred from Scripture",
-  "Biblical status: Traditional or scholarly estimate—not explicitly stated in Scripture",
-  "Biblical status: Disputed interpretation",
-  "Biblical status: Not specified in Scripture",
-]);
-
-function normalizedQuote(value) {
-  return String(value || "").toLowerCase().replace(/[“”‘’]/g, "'").replace(/[^a-z0-9']+/g, " ").trim();
-}
-
-function onlyVerifiedVerseMaterial(verses) {
-  const seenReferences = new Set();
-  return verses.flatMap((verse) => {
-    const reference = String(verse.reference || "").trim();
-    if (!reference || seenReferences.has(reference.toLowerCase())) return [];
-    seenReferences.add(reference.toLowerCase());
-    const fragment = String(verse.fragment || "").trim();
-    const normalizedFragment = normalizedQuote(fragment);
-    const exactFragment = normalizedFragment && normalizedQuote(verse.text).includes(normalizedFragment) ? fragment : "";
-    // Notes can become a second, unsourced assistant answer. Never return them.
-    return [{ reference, text: String(verse.text || "").trim(), fragment: exactFragment }];
-  }).filter((verse) => verse.text);
-}
-
 async function chat(input, request) {
   if (!process.env.OPENROUTER_API_KEY) return { status: 503, body: { error: "OpenRouter is not configured yet." } };
   const translation = input.translation === "twb" ? "twb" : "kjv";
@@ -63,29 +38,28 @@ async function chat(input, request) {
   } catch { return { status: 502, body: { error: "The Bible service is temporarily unavailable." } }; }
   const upstream = await response.json().catch(() => ({}));
   if (!response.ok) return { status: response.status, body: { error: upstream?.error?.message || "The Bible service could not answer right now." } };
-  const generated = parseModelContent(upstream?.choices?.[0]?.message?.content);
-  let verses = onlyVerifiedVerseMaterial(await enrichVerses(generated.verses, translation));
+  const generated = normalizeModelResponse(parseModelContent(upstream?.choices?.[0]?.message?.content));
+  let verses = verifyVerseMaterial(await enrichVerses(generated.verses, translation));
   // A malformed model answer must not turn into a prose answer or a blank card.
   // This fallback remains entirely Scripture and is intentionally predictable.
   if (!verses.length) {
-    verses = onlyVerifiedVerseMaterial(await enrichVerses([{ reference: "Psalm 119:105" }], translation));
+    verses = verifyVerseMaterial(await enrichVerses([{ reference: "Psalm 119:105", fragment: "Thy word is a lamp unto my feet" }], translation));
   }
   usage.count += 1;
   const remaining = Math.max(0, limit - usage.count);
   const mode = generated.mode === "fact" ? "fact" : "conversation";
-  const status = mode === "fact" && factStatuses.has(String(generated.status || ""))
-    ? String(generated.status)
-    : mode === "fact" ? "Biblical status: Not specified in Scripture" : "";
+  const status = mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "";
   // The UI composes its Cipher strips from verified fragments. Do not pass the
   // model's natural-language answer through, even if it sounds polished.
-  return { status: 200, body: { mode, answer: "", verses, status, translation, model: upstream.model || model, remaining } };
+  return { status: 200, body: { mode, answer: "", verses, status, statusNote: mode === "fact" ? generated.statusNote : "", truthAnchor: mode === "fact" ? generated.truthAnchor : "", translation, model: upstream.model || model, remaining } };
 }
 
 async function resolveVerses(input) {
   const translation = input.translation === "twb" ? "twb" : "kjv";
   const references = Array.isArray(input.references) ? input.references.filter((reference) => typeof reference === "string").slice(0, 12) : [];
   if (!references.length) return { status: 400, body: { error: "At least one Bible reference is required." } };
-  const verses = await enrichVerses(references.map((reference) => ({ reference })), translation);
+  const fragments = Array.isArray(input.fragments) ? input.fragments : [];
+  const verses = verifyVerseMaterial(await enrichVerses(references.map((reference, index) => ({ reference, fragment: fragments[index] || "" })), translation));
   return { status: 200, body: { translation, verses } };
 }
 

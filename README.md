@@ -10,10 +10,10 @@ resolves verse text from the selected translation, and exposes:
 - `POST /api/verses` for switching displayed verse text between KJV and The Way Version
 
 The request body is `{ translation: "kjv" | "twb", session_id, messages }`.
-The response contains resolved verses, translation, model, daily remaining
-count, and the direct-question evidence status when needed. The `answer` field
-is intentionally empty: the client renders authentic verse text and verified
-Scripture Cipher fragments rather than model-written prose.
+The response contains resolved verses, translation, model, and the direct-question
+evidence status when needed. The `answer` field is intentionally empty: the
+client renders authentic Scripture tiles and verified citation bubbles rather
+than model-written prose.
 
 ## Run locally
 
@@ -47,17 +47,14 @@ for the secret during Blueprint setup. Optional settings include
 
 ## Model choice
 
-The default is `google/gemini-2.5-flash`: it is a strong general reasoning
-model with a large context window and current OpenRouter structured-output
-support. Bible accuracy does not depend on the model's memory alone: the model
-selects references, then the backend resolves the exact KJV or The Way Version
-text from a canonical source before returning it. The server discards an
-unresolved reference, duplicate citation, non-exact Cipher fragment, note, or
-free-form model answer; if a model response contains no usable citation, it
-falls back to one resolved Scripture passage rather than returning prose. To
-reduce cost further, set
-`OPENROUTER_MODEL=google/gemini-2.5-flash-lite`; to change models later, only
-the Render environment variable needs to change.
+The safe default is `google/gemini-2.5-flash`. The November 3, 2026 product
+spec identifies `anthropic/claude-sonnet-5.5` as the quality baseline and
+`google/gemini-3.8-flash` as the lower-cost challenger; benchmark those exact
+OpenRouter IDs against the golden tests before changing Render's environment.
+The model is never trusted as the Bible source: it selects references and
+fragments, then the backend resolves the exact KJV or The Way Version text and
+checks every fragment as a contiguous substring. Change the model only through
+`OPENROUTER_MODEL` so rollback is one environment-variable change.
 
 ## Context compaction and cost control
 
@@ -74,15 +71,26 @@ storage/Redis, and connect the Plus purchase to a server-verified entitlement.
 
 ## Scripture Cipher contract
 
-For a direct Bible fact question, the model supplies only a list of one-to-one
-references and short source fragments. Each fragment is verified as a
-contiguous quote in the server-resolved verse before the app can display it.
-The mobile client presents those fragments as separate white strips with a
-tap-to-open citation and puts the full verse beneath. For facts not explicitly
-settled in Scripture, the response carries one controlled `Biblical status`
-label rather than a model-written explanation. Ordinary questions receive
-resolved verses only. This prevents introductions such as “The Bible does not
-specify…” from appearing as an answer without Scripture.
+For every non-safety response, the model supplies an ordered list of short
+source fragments. The frontend renders exactly one rectangular tile per item,
+then exactly one citation bubble per item in the same order. Duplicate
+references are preserved intentionally; ten tiles require ten bubbles even if
+several come from one verse. The server rejects unresolved references and
+non-contiguous fragments, and falls back to one authentic verse if the model
+response cannot be verified. Citation taps open the full verse; the tile itself
+never becomes a second prose answer.
+
+Direct biblical fact questions additionally return one of the five controlled
+`Biblical status` labels plus an optional short `statusNote`. This is rendered
+below the citation row and is not counted as a tile or citation. Word-source
+citations prove the wording of a tile, not automatically the factual truth of a
+stitched sentence, so uncertain ages, dates, and chronologies must be labeled.
+
+The full authoritative behavior, including the 20 golden conversations,
+accuracy exception for Jesus' age, safety override, and QA gates, is maintained
+in the linked Google Doc titled `Bible Bot — Implementation Spec & 20 Examples —
+v2.0`. Keep that specification and this API contract aligned when adding
+examples.
 
 ## Test
 
