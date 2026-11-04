@@ -63,6 +63,19 @@ export function verifyVerseMaterial(verses, { allowWholeVerseFallback = true, ma
   });
 }
 
+/** Keep a short, answer-bearing verse intact when a model returns only its
+ * opening clause, so a card cannot hide the conclusion that completes it. */
+export function preserveCompleteShortVerses(verses, { maxCharacters = 360, minimumFragmentRatio = 0.65 } = {}) {
+  return (Array.isArray(verses) ? verses : []).map((verse) => {
+    const text = String(verse?.text || '').replace(/\s+/g, ' ').trim();
+    const fragment = String(verse?.fragment || '').replace(/\s+/g, ' ').trim();
+    const normalizedText = normalizedQuote(text);
+    const normalizedFragment = normalizedQuote(fragment);
+    if (!text || !fragment || text.length > maxCharacters || normalizedFragment.length >= normalizedText.length * minimumFragmentRatio) return verse;
+    return { ...verse, fragment: text };
+  });
+}
+
 export function normalizeModelResponse(value) {
   const response = value && typeof value === "object" ? value : {};
   const mode = response.mode === "fact" || response.mode === "BIBLE_FACT" ? "fact" : "conversation";

@@ -1,6 +1,6 @@
 import { compactConversation, sanitizeMessages } from "../src/context.mjs";
 import { promptForTranslation } from "../src/rules.mjs";
-import { canonicalReference, normalizeModelResponse, verifyVerseMaterial } from "../src/contract.mjs";
+import { canonicalReference, normalizeModelResponse, preserveCompleteShortVerses, verifyVerseMaterial } from "../src/contract.mjs";
 import { detectLanguage, languageLabel } from "../src/language.mjs";
 import { requestOpenRouter } from "../src/openrouter.mjs";
 import { parseExplicitVerseRequest, referencesForVerseRequest } from "../src/verse-request.mjs";
@@ -109,7 +109,7 @@ async function chat(request, env, input) {
   const routed = await requestOpenRouter({ apiKey: env.OPENROUTER_API_KEY, primaryModel: model, fallbackModel, payload, timeoutMs: Math.max(1000, Number(env.OPENROUTER_TIMEOUT_MS || 6000)), referer: env.OPENROUTER_SITE_URL || "https://thewayversion.com", title: env.OPENROUTER_SITE_NAME || "Talk To The Bible" });
   if (!routed) return respond(request, env, 502, { error: "The Bible service is temporarily unavailable. Please try again in a moment." });
   const upstream = routed.body;
-  const generated = normalizeModelResponse(modelContent(upstream?.choices?.[0]?.message?.content)); const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3; let verses = verifyVerseMaterial(await enrich(generated.verses.slice(0, requestedMax), translation, env, inputLanguage));
+  const generated = normalizeModelResponse(modelContent(upstream?.choices?.[0]?.message?.content)); const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3; let verses = preserveCompleteShortVerses(verifyVerseMaterial(await enrich(generated.verses.slice(0, requestedMax), translation, env, inputLanguage)));
   if (!isReferenceFollowUp(question) && recentRefSet.size) {
     const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase()));
     verses = fresh;

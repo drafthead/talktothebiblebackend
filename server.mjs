@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { compactConversation, sanitizeMessages } from "./src/context.mjs";
 import { enrichVerses } from "./src/bible.mjs";
 import { promptForTranslation } from "./src/rules.mjs";
-import { canonicalReference, normalizeModelResponse, verifyVerseMaterial } from "./src/contract.mjs";
+import { canonicalReference, normalizeModelResponse, preserveCompleteShortVerses, verifyVerseMaterial } from "./src/contract.mjs";
 import { detectLanguage, languageLabel } from "./src/language.mjs";
 import { requestOpenRouter } from "./src/openrouter.mjs";
 import { parseExplicitVerseRequest, referencesForVerseRequest } from "./src/verse-request.mjs";
@@ -65,7 +65,7 @@ async function chat(input, request) {
   const upstream = routed.body;
   const generated = normalizeModelResponse(parseModelContent(upstream?.choices?.[0]?.message?.content));
   const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3;
-  let verses = verifyVerseMaterial(await enrichVerses(generated.verses.slice(0, requestedMax), translation, inputLanguage));
+  let verses = preserveCompleteShortVerses(verifyVerseMaterial(await enrichVerses(generated.verses.slice(0, requestedMax), translation, inputLanguage)));
   if (!isReferenceFollowUp(question) && recentRefSet.size) { const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase())); verses = fresh; }
   // A malformed model answer must not turn into a prose answer or a blank card.
   // This fallback remains entirely Scripture and is intentionally predictable.
