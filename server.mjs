@@ -24,6 +24,7 @@ function parseBody(text) { try { return JSON.parse(text || "{}"); } catch { retu
 async function readBody(request) { let body = ""; for await (const chunk of request) { body += chunk; if (body.length > 160000) throw new Error("Request too large"); } return body; }
 function parseModelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return { mode: "conversation", verses: [], status: "" }; } }
 function recentReferences(messages) { const references = new Set(); for (const message of messages.filter((item) => item.role === "assistant")) for (const match of String(message.content || "").matchAll(/((?:\d\s+)?[A-Za-z][A-Za-z -]+\s+\d+:\d+(?:-\d+)?)/g)) { const reference = canonicalReference(match[1]); if (reference) references.add(reference.toLowerCase()); } return references; }
+function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 119:105", "Proverbs 3:5", "Matthew 11:28", "Philippians 4:6", "Joshua 1:9", "Romans 8:28"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
 function isReferenceFollowUp(question) { return /\b(that|this|these|those|the verse|what does (?:it|that|this) mean|explain|repeat|why did you|same passage)\b/i.test(question); }
 
 async function chat(input, request) {
@@ -67,7 +68,7 @@ async function chat(input, request) {
   // A malformed model answer must not turn into a prose answer or a blank card.
   // This fallback remains entirely Scripture and is intentionally predictable.
   if (!verses.length) {
-    verses = verifyVerseMaterial(await enrichVerses([{ reference: "Psalm 119:105", fragment: "Thy word is a lamp unto my feet" }], translation));
+    verses = verifyVerseMaterial(await enrichVerses([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation));
   }
   usage.count += 1;
   const remaining = isPlus ? null : Math.max(0, limit - usage.count);

@@ -8,6 +8,8 @@ test('expands explicit ranges and chapters without silently truncating at two ve
   assert.deepEqual(referencesForVerseRequest(range), ['Psalms 1:5', 'Psalms 1:6', 'Psalms 1:7', 'Psalms 1:8', 'Psalms 1:9', 'Psalms 1:10']);
   const chapter = parseExplicitVerseRequest('Give me John chapter 3');
   assert.equal(referencesForVerseRequest(chapter).length, 20);
+  const prefixed = parseExplicitVerseRequest('Give me Psalms 119:105-110');
+  assert.deepEqual(prefixed, { book: 'Psalms', chapter: 119, start: 105, end: 110, kind: 'range' });
 });
 
 test('tries the fallback model after a provider failure', async () => {

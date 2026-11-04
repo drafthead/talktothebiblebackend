@@ -53,6 +53,7 @@ function recentReferences(messages) {
   }
   return references;
 }
+function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 119:105", "Proverbs 3:5", "Matthew 11:28", "Philippians 4:6", "Joshua 1:9", "Romans 8:28"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
 function isReferenceFollowUp(question) {
   return /\b(that|this|these|those|the verse|what does (?:it|that|this) mean|explain|repeat|why did you|same passage)\b/i.test(question);
 }
@@ -95,7 +96,7 @@ async function chat(request, env, input) {
     const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase()));
     if (fresh.length) verses = fresh;
   }
-  if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: "Psalm 119:105", fragment: "Thy word is a lamp unto my feet" }], translation, env));
+  if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env));
   const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first())?.count || 0) + 1 : 0;
   if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(id, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
   return respond(request, env, 200, { mode: generated.mode === "fact" ? "fact" : "conversation", answer: "", verses, status: generated.mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "", statusNote: generated.mode === "fact" ? generated.statusNote : "", truthAnchor: generated.mode === "fact" ? generated.truthAnchor : "", translation, model: routed.model, detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });

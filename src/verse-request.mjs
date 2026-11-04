@@ -1,11 +1,16 @@
 function cleanBook(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim().replace(/[.,!?;:]+$/, '');
+  return String(value || '').replace(/\s+/g, ' ').trim().replace(/[.,!?;:]+$/, '')
+    .replace(/^(?:please\s+)?(?:give\s+me|show\s+me|read|open|fetch|get)\s+/i, '');
+}
+
+function stripRequestLead(value) {
+  return String(value || '').replace(/^\s*(?:please\s+)?(?:give\s+me|show\s+me|read|open|fetch|get)\s+/i, '').trim();
 }
 
 // Explicit verse requests are deterministic: the model should not choose only
 // a couple of examples when the user asked for a passage or chapter range.
 export function parseExplicitVerseRequest(question) {
-  const text = String(question || '').trim();
+  const text = stripRequestLead(question);
   const range = text.match(/\b((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)\s*(?:-|–|—|\bto\b|\bthrough\b)\s*(?:(?:[1-3]\s+)?[A-Za-z]+\s+)?(?:(\d+):)?(\d+)\b/i);
   if (range) {
     const book = cleanBook(range[1]);
