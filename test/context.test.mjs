@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildUserMemory, compactConversation, sanitizeMessages } from "../src/context.mjs";
 import { parseReference } from "../src/bible.mjs";
 import { normalizeModelResponse, verifyVerseMaterial } from "../src/contract.mjs";
+import { promptForTranslation } from "../src/rules.mjs";
 
 test("compacts older turns but keeps the newest conversation turns", () => {
   const messages = Array.from({ length: 14 }, (_, index) => ({ role: index % 2 ? "assistant" : "user", content: `turn-${index}` }));
@@ -53,4 +54,11 @@ test("normalizes the spec response shape and fact status", () => {
   assert.equal(result.mode, "fact");
   assert.equal(result.verses[0].fragment, "about thirty");
   assert.equal(result.status, "Biblical status: Not specified in Scripture");
+});
+
+test("passes the selected interface language into the Bible response instructions", () => {
+  const prompt = promptForTranslation("kjv", "ko");
+  assert.match(prompt, /Korean-speaking user/);
+  assert.match(prompt, /Write statusNote and truthAnchor in Korean/);
+  assert.match(prompt, /Bible fragments must remain exact verified text/);
 });
