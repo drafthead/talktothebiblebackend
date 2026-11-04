@@ -61,7 +61,7 @@ in `wrangler.toml`; never put the OpenRouter key in the web or mobile bundle.
 
 ## Model choice
 
-The default production model is `openai/gpt-4.1`: it is stronger at instruction following and factual synthesis than the former mini default, while remaining far cheaper than a flagship reasoning model. `openai/gpt-4.1-mini` is the automatic fallback for a transient provider/network failure. The fallback is only used when the primary request fails; it does not change the verified-verse contract. Keep both model names configurable through `OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL` and benchmark replacements against the golden tests before changing production.
+The default production model is `openai/gpt-4.1`: it is stronger at instruction following and factual synthesis than the former mini default, while remaining far cheaper than a flagship reasoning model. `openai/gpt-4.1-mini` is the automatic fallback for a transient provider/network failure or a primary response that exceeds `OPENROUTER_TIMEOUT_MS` (currently six seconds). The fallback is only used when the primary request fails; it does not change the verified-verse contract. Keep both model names configurable through `OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL` and benchmark replacements against the golden tests before changing production.
 The model is never trusted as the Bible source: it selects references and
 fragments, then the backend resolves the exact KJV or The Way Version text and
 checks every fragment as a contiguous substring. Change the model only through

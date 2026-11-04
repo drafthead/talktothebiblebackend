@@ -8,6 +8,7 @@ workers_dev = true
 OPENROUTER_MODEL = "openai/gpt-4.1"
 OPENROUTER_FALLBACK_MODEL = "openai/gpt-4.1-mini"
 OPENROUTER_MAX_TOKENS = "700"
+OPENROUTER_TIMEOUT_MS = "6000"
 OPENROUTER_SITE_URL = "https://thewayversion.com"
 OPENROUTER_SITE_NAME = "Talk To The Bible"
 OPENROUTER_TRANSLATION_MODEL = "openai/gpt-4.1-mini"

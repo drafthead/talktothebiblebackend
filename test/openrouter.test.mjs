@@ -35,3 +35,23 @@ test('tries the fallback model after a provider failure', async () => {
   assert.deepEqual(models, ['primary/model', 'fallback/model']);
   assert.equal(result.model, 'fallback/model');
 });
+
+test('tries the fallback model when the primary exceeds the timeout', async () => {
+  const models = [];
+  const result = await requestOpenRouter({
+    apiKey: 'test', primaryModel: 'primary/model', fallbackModel: 'fallback/model', payload: { messages: [] }, timeoutMs: 15,
+    fetchImpl: async (_url, options) => {
+      const model = JSON.parse(options.body).model;
+      models.push(model);
+      if (model === 'primary/model') {
+        await new Promise((resolve, reject) => {
+          if (options.signal.aborted) return reject(options.signal.reason);
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        });
+      }
+      return { ok: true, json: async () => ({ choices: [{ message: { content: '{}' } }] }) };
+    },
+  });
+  assert.deepEqual(models, ['primary/model', 'fallback/model']);
+  assert.equal(result.model, 'fallback/model');
+});
