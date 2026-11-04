@@ -10,7 +10,7 @@ export function normalizedQuote(value) {
   return String(value || "")
     .toLowerCase()
     .replace(/[“”‘’]/g, "'")
-    .replace(/[^a-z0-9']+/g, " ")
+    .replace(/[^\p{L}\p{N}']+/gu, " ")
     .trim();
 }
 
@@ -47,6 +47,11 @@ export function verifyVerseMaterial(verses, { allowWholeVerseFallback = true, ma
       text,
       fragment,
       note: "",
+      sourceText: verse.sourceText,
+      sourceLabel: verse.sourceLabel,
+      sourceAttribution: verse.sourceAttribution,
+      sourceLanguage: verse.sourceLanguage,
+      sourceUrl: verse.sourceUrl,
     }];
   });
   const seen = new Set();

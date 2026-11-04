@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
+import { localizedEdition, resolveLocalizedVerse } from "./multilingual-bible.mjs";
 
 const wayCache = new Map();
 const BOOK_ALIASES = new Map([["psalm", "psalms"], ["song of songs", "song-of-solomon"], ["song of solomon", "song-of-solomon"]]);
@@ -25,7 +26,7 @@ async function resolveKjv(reference) {
   const base = process.env.KJV_API_BASE_URL || "https://bible-api.com";
   const payload = await fetchJson(`${base.replace(/\/$/, "")}/${encodeURIComponent(reference)}?translation=kjv`);
   const text = String(payload?.text || "").replace(/\s+/g, " ").trim();
-  return text ? { reference: payload.reference || reference, text } : null;
+  return text ? { reference: payload.reference || reference, text, sourceLabel: 'King James Version', sourceAttribution: 'King James Version (KJV), Public Domain.', sourceLanguage: 'en-US' } : null;
 }
 
 async function getWayBook(slug) {
@@ -51,20 +52,24 @@ async function resolveWay(reference) {
   const chapter = book?.chapters?.find((item) => Number(item.number) === parsed.chapter);
   const verses = chapter?.verses?.filter((item) => Number(item.number) >= parsed.start && Number(item.number) <= parsed.end) || [];
   if (!verses.length) return null;
-  return { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end === parsed.start ? "" : `-${parsed.end}`}`, text: verses.map((verse) => verse.text).join(" ") };
+  return { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end === parsed.start ? "" : `-${parsed.end}`}`, text: verses.map((verse) => verse.text).join(" "), sourceLabel: 'The Way Version', sourceLanguage: 'en-US' };
 }
 
-export async function resolveVerse(reference, translation) {
-  try { return translation === "twb" ? await resolveWay(reference) : await resolveKjv(reference); } catch { return null; }
+export async function resolveVerse(reference, translation, language = 'en-US') {
+  try {
+    const localized = localizedEdition(language);
+    if (localized) return (await resolveLocalizedVerse(reference, language, process.env.MULTILINGUAL_BIBLE_BASE_URL)) || (translation === "twb" ? await resolveWay(reference) : await resolveKjv(reference));
+    return translation === "twb" ? await resolveWay(reference) : await resolveKjv(reference);
+  } catch { return null; }
 }
 
-export async function enrichVerses(verses, translation) {
+export async function enrichVerses(verses, translation, language = 'en-US') {
   const safeVerses = Array.isArray(verses) ? verses.slice(0, 20) : [];
   return (await Promise.all(safeVerses.map(async (verse) => {
     const reference = String(verse?.reference || "").trim().slice(0, 120);
     if (!reference) return null;
-    const resolved = await resolveVerse(reference, translation);
+    const resolved = await resolveVerse(reference, translation, language);
     if (!resolved) return null;
-    return { reference: resolved.reference, text: resolved.text, fragment: String(verse?.fragment || "").trim().slice(0, 500), note: "" };
+    return { reference: resolved.reference, text: resolved.text, fragment: String(verse?.fragment || "").trim().slice(0, 500), note: "", sourceLabel: resolved.sourceLabel, sourceAttribution: resolved.sourceAttribution, sourceLanguage: resolved.sourceLanguage };
   }))).filter(Boolean);
 }

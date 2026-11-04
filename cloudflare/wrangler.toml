@@ -10,11 +10,13 @@ OPENROUTER_FALLBACK_MODEL = "openai/gpt-4.1-mini"
 OPENROUTER_MAX_TOKENS = "700"
 OPENROUTER_SITE_URL = "https://thewayversion.com"
 OPENROUTER_SITE_NAME = "Talk To The Bible"
+OPENROUTER_TRANSLATION_MODEL = "openai/gpt-4.1-mini"
 ALLOWED_ORIGINS = "*"
 MAX_DAILY_REQUESTS = "30"
 PLUS_DAILY_REQUESTS = "1000"
 THE_WAY_BASE_URL = "https://thewayversion.com"
 KJV_API_BASE_URL = "https://bible-api.com"
+MULTILINGUAL_BIBLE_BASE_URL = "https://api.midvash.com"
 
 # Run `wrangler d1 create talk-to-the-bible-db`, then replace the placeholder
 # below before the first deploy. The OpenRouter key is a Worker secret, not a

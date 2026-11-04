@@ -6,6 +6,7 @@ import { canonicalReference, normalizeModelResponse, verifyVerseMaterial } from 
 import { detectLanguage, languageLabel } from "./src/language.mjs";
 import { requestOpenRouter } from "./src/openrouter.mjs";
 import { parseExplicitVerseRequest, referencesForVerseRequest } from "./src/verse-request.mjs";
+import { translateWayVerses } from "./src/translate.mjs";
 
 const port = Number(process.env.PORT || 10000);
 const openRouterUrl = "https://openrouter.ai/api/v1/chat/completions";
@@ -46,14 +47,15 @@ async function chat(input, request) {
   const explicitRequest = parseExplicitVerseRequest(question);
   if (explicitRequest) {
     const requestedReferences = referencesForVerseRequest(explicitRequest);
-    const resolved = await enrichVerses(requestedReferences.map((reference) => ({ reference })), translation);
-    const verses = verifyVerseMaterial(resolved.map((verse) => ({ ...verse, fragment: verse.text })), { maxSegments: 20 });
+    const resolved = await enrichVerses(requestedReferences.map((reference) => ({ reference })), translation, inputLanguage);
+    let verses = verifyVerseMaterial(resolved.map((verse) => ({ ...verse, fragment: verse.text })), { maxSegments: 20 });
+    if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: process.env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: process.env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
     const statusNote = resolved.length < requestedReferences.length && explicitRequest.kind !== 'single'
       ? `This passage contains ${resolved.length} available verse${resolved.length === 1 ? '' : 's'} in the requested range.`
       : '';
     usage.count += 1;
     const remaining = isPlus ? null : Math.max(0, limit - usage.count);
-    return { status: 200, body: { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", translation, model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining, plus: isPlus } };
+    return { status: 200, body: { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining, plus: isPlus } };
   }
   const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the immediately preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Avoid these references from the immediately preceding answers unless no relevant alternative exists: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
   const lengthRule = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? "Use 3–8 concise fragments from as many as 4 passages when that is needed to answer the fuller request; there is no two-verse limit." : "Use 1–3 concise fragments; do not pad a short question with unrelated verses.";
@@ -63,20 +65,21 @@ async function chat(input, request) {
   const upstream = routed.body;
   const generated = normalizeModelResponse(parseModelContent(upstream?.choices?.[0]?.message?.content));
   const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3;
-  let verses = verifyVerseMaterial(await enrichVerses(generated.verses.slice(0, requestedMax), translation));
+  let verses = verifyVerseMaterial(await enrichVerses(generated.verses.slice(0, requestedMax), translation, inputLanguage));
   if (!isReferenceFollowUp(question) && recentRefSet.size) { const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase())); verses = fresh; }
   // A malformed model answer must not turn into a prose answer or a blank card.
   // This fallback remains entirely Scripture and is intentionally predictable.
   if (!verses.length) {
-    verses = verifyVerseMaterial(await enrichVerses([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation));
+    verses = verifyVerseMaterial(await enrichVerses([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, inputLanguage));
   }
+  if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: process.env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: process.env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
   usage.count += 1;
   const remaining = isPlus ? null : Math.max(0, limit - usage.count);
   const mode = generated.mode === "fact" ? "fact" : "conversation";
   const status = mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "";
   // The UI composes its Cipher strips from verified fragments. Do not pass the
   // model's natural-language answer through, even if it sounds polished.
-  return { status: 200, body: { mode, answer: "", verses, status, statusNote: mode === "fact" ? generated.statusNote : "", truthAnchor: mode === "fact" ? generated.truthAnchor : "", translation, model: routed.model, detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining, plus: isPlus } };
+  return { status: 200, body: { mode, answer: "", verses, status, statusNote: mode === "fact" ? generated.statusNote : "", truthAnchor: mode === "fact" ? generated.truthAnchor : "", translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: routed.model, detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining, plus: isPlus } };
 }
 
 async function resolveVerses(input) {
@@ -84,7 +87,8 @@ async function resolveVerses(input) {
   const references = Array.isArray(input.references) ? input.references.filter((reference) => typeof reference === "string").slice(0, 12) : [];
   if (!references.length) return { status: 400, body: { error: "At least one Bible reference is required." } };
   const fragments = Array.isArray(input.fragments) ? input.fragments : [];
-  const verses = verifyVerseMaterial(await enrichVerses(references.map((reference, index) => ({ reference, fragment: fragments[index] || "" })), translation));
+  const language = String(input.language || 'en-US').slice(0, 12);
+  const verses = verifyVerseMaterial(await enrichVerses(references.map((reference, index) => ({ reference, fragment: fragments[index] || "" })), translation, language));
   return { status: 200, body: { translation, verses } };
 }
 

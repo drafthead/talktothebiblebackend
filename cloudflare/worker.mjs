@@ -4,6 +4,8 @@ import { canonicalReference, normalizeModelResponse, verifyVerseMaterial } from 
 import { detectLanguage, languageLabel } from "../src/language.mjs";
 import { requestOpenRouter } from "../src/openrouter.mjs";
 import { parseExplicitVerseRequest, referencesForVerseRequest } from "../src/verse-request.mjs";
+import { localizedEdition, resolveLocalizedVerse } from "../src/multilingual-bible.mjs";
+import { translateWayVerses } from "../src/translate.mjs";
 
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 
@@ -20,8 +22,10 @@ function parseBody(request) { return request.json().catch(() => null); }
 function deviceId(request, input) { return String(request.headers.get("x-anonymous-id") || input?.device_id || input?.session_id || "anonymous").trim().slice(0, 120) || "anonymous"; }
 function bookSlug(name) { const normalized = String(name || "").trim().toLowerCase().replace(/\s+/g, " "); const aliases = { psalm: "psalms", "song of songs": "song-of-solomon", "song of solomon": "song-of-solomon" }; return (aliases[normalized] || normalized).replace(/ /g, "-"); }
 function parseReference(reference) { const match = String(reference || "").trim().match(/^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$/); return match ? { book: match[1], chapter: Number(match[2]), start: Number(match[3]), end: Number(match[4] || match[3]) } : null; }
-async function resolveVerse(reference, translation, env) {
+async function resolveVerse(reference, translation, env, language = 'en-US') {
   try {
+    const localized = localizedEdition(language);
+    if (localized) return (await resolveLocalizedVerse(reference, language, env.MULTILINGUAL_BIBLE_BASE_URL || 'https://api.midvash.com')) || null;
     if (translation === "twb") {
       const parsed = parseReference(reference); if (!parsed) return null;
       const response = await fetch(`${String(env.THE_WAY_BASE_URL || "https://thewayversion.com").replace(/\/$/, "")}/app/data/books/${bookSlug(parsed.book)}.json`);
@@ -36,11 +40,11 @@ async function resolveVerse(reference, translation, env) {
     return text ? { reference: payload.reference || reference, text } : null;
   } catch { return null; }
 }
-async function enrich(verses, translation, env) {
+async function enrich(verses, translation, env, language = 'en-US') {
   // A direct passage request may contain up to twenty verses. Keep that
   // contract at the edge as well as in the Node implementation.
   const items = Array.isArray(verses) ? verses.slice(0, 20) : [];
-  return (await Promise.all(items.map(async (item) => { const reference = String(item?.reference || "").trim(); const resolved = await resolveVerse(reference, translation, env); return resolved ? { ...resolved, fragment: String(item?.fragment || "").trim().slice(0, 500), note: "" } : null; }))).filter(Boolean);
+  return (await Promise.all(items.map(async (item) => { const reference = String(item?.reference || "").trim(); const resolved = await resolveVerse(reference, translation, env, language); return resolved ? { ...resolved, fragment: String(item?.fragment || "").trim().slice(0, 500), note: "" } : null; }))).filter(Boolean);
 }
 function modelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return {}; } }
 function recentReferences(messages) {
@@ -78,12 +82,13 @@ async function chat(request, env, input) {
   const explicitRequest = parseExplicitVerseRequest(question);
   if (explicitRequest) {
     const requestedReferences = referencesForVerseRequest(explicitRequest);
-    const resolved = await enrich(requestedReferences.map((reference) => ({ reference })), translation, env);
-    const verses = verifyVerseMaterial(resolved.map((verse) => ({ ...verse, fragment: verse.text })), { maxSegments: 20 });
+    const resolved = await enrich(requestedReferences.map((reference) => ({ reference })), translation, env, inputLanguage);
+    let verses = verifyVerseMaterial(resolved.map((verse) => ({ ...verse, fragment: verse.text })), { maxSegments: 20 });
+    if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
     const statusNote = resolved.length < requestedReferences.length && explicitRequest.kind !== "single" ? `This passage contains ${resolved.length} available verses in the requested range.` : "";
     const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first())?.count || 0) + 1 : 0;
     if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(id, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
-    return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", translation, model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
+    return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
   }
   const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the immediately preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Avoid these references from the immediately preceding answers unless no relevant alternative exists: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
   const lengthRule = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? "Use 3–8 concise fragments from as many as 4 passages when that is needed to answer the fuller request; there is no two-verse limit." : "Use 1–3 concise fragments; do not pad a short question with unrelated verses.";
@@ -91,17 +96,18 @@ async function chat(request, env, input) {
   const routed = await requestOpenRouter({ apiKey: env.OPENROUTER_API_KEY, primaryModel: model, fallbackModel, payload, referer: env.OPENROUTER_SITE_URL || "https://thewayversion.com", title: env.OPENROUTER_SITE_NAME || "Talk To The Bible" });
   if (!routed) return respond(request, env, 502, { error: "The Bible service is temporarily unavailable. Please try again in a moment." });
   const upstream = routed.body;
-  const generated = normalizeModelResponse(modelContent(upstream?.choices?.[0]?.message?.content)); const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3; let verses = verifyVerseMaterial(await enrich(generated.verses.slice(0, requestedMax), translation, env));
+  const generated = normalizeModelResponse(modelContent(upstream?.choices?.[0]?.message?.content)); const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3; let verses = verifyVerseMaterial(await enrich(generated.verses.slice(0, requestedMax), translation, env, inputLanguage));
   if (!isReferenceFollowUp(question) && recentRefSet.size) {
     const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase()));
     verses = fresh;
   }
-  if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env));
+  if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env, inputLanguage));
+  if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
   const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first())?.count || 0) + 1 : 0;
   if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(id, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
-  return respond(request, env, 200, { mode: generated.mode === "fact" ? "fact" : "conversation", answer: "", verses, status: generated.mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "", statusNote: generated.mode === "fact" ? generated.statusNote : "", truthAnchor: generated.mode === "fact" ? generated.truthAnchor : "", translation, model: routed.model, detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
+  return respond(request, env, 200, { mode: generated.mode === "fact" ? "fact" : "conversation", answer: "", verses, status: generated.mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "", statusNote: generated.mode === "fact" ? generated.statusNote : "", truthAnchor: generated.mode === "fact" ? generated.truthAnchor : "", translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: routed.model, detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
 }
 
-async function resolveReferences(request, env, input) { const translation = input.translation === "twb" ? "twb" : "kjv"; const references = Array.isArray(input.references) ? input.references.filter((item) => typeof item === "string").slice(0, 20) : []; const fragments = Array.isArray(input.fragments) ? input.fragments : []; const verses = verifyVerseMaterial(await enrich(references.map((reference, index) => ({ reference, fragment: fragments[index] || "" })), translation, env)); return respond(request, env, 200, { translation, verses }); }
+async function resolveReferences(request, env, input) { const translation = input.translation === "twb" ? "twb" : "kjv"; const language = String(input.language || 'en-US').slice(0, 12); const references = Array.isArray(input.references) ? input.references.filter((item) => typeof item === "string").slice(0, 20) : []; const fragments = Array.isArray(input.fragments) ? input.fragments : []; const verses = verifyVerseMaterial(await enrich(references.map((reference, index) => ({ reference, fragment: fragments[index] || "" })), translation, env, language)); return respond(request, env, 200, { translation, verses }); }
 
 export default { async fetch(request, env) { if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(request, env) }); const url = new URL(request.url); if (request.method === "GET" && url.pathname === "/health") return respond(request, env, 200, { ok: true, service: "talk-to-the-bible-api", model: env.OPENROUTER_MODEL || "openai/gpt-4.1-mini", storage: env.BIBLE_DB ? "d1" : "unconfigured" }); if (request.method === "GET" && url.pathname === "/") return respond(request, env, 200, { service: "talk-to-the-bible-api", chat: "/api/chat", verses: "/api/verses" }); if (request.method !== "POST") return respond(request, env, 404, { error: "Not found" }); const input = await parseBody(request); if (!input) return respond(request, env, 400, { error: "Invalid request." }); if (url.pathname === "/api/chat") return chat(request, env, input); if (url.pathname === "/api/verses") return resolveReferences(request, env, input); return respond(request, env, 404, { error: "Not found" }); } };
