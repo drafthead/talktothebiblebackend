@@ -58,6 +58,17 @@ function recentReferences(messages) {
   return references;
 }
 function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 119:105", "Proverbs 3:5", "Matthew 11:28", "Philippians 4:6", "Joshua 1:9", "Romans 8:28"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
+function rangeStatusNote(language, available, requested) {
+  if (available >= requested) return "";
+  const count = String(available);
+  const total = String(requested);
+  const normalized = String(language || "en").toLowerCase();
+  if (normalized.startsWith("es")) return `Este pasaje contiene ${count} versículos disponibles de los ${total} solicitados.`;
+  if (normalized.startsWith("fr")) return `Ce passage contient ${count} versets disponibles sur les ${total} demandés.`;
+  if (normalized.startsWith("de")) return `Dieser Abschnitt enthält ${count} verfügbare Verse von den ${total} angeforderten.`;
+  if (normalized.startsWith("pt")) return `Esta passagem contém ${count} versículos disponíveis dos ${total} solicitados.`;
+  return `This passage contains ${count} available verses in the ${total}-verse range requested.`;
+}
 function isReferenceFollowUp(question) {
   // A contextual follow-up is not permission to repeat the same card. Only an
   // explicit request to repeat or revisit a passage may do that.
@@ -87,7 +98,7 @@ async function chat(request, env, input) {
     const resolved = await enrich(requestedReferences.map((reference) => ({ reference })), translation, env, inputLanguage);
     let verses = verifyVerseMaterial(resolved.map((verse) => ({ ...verse, fragment: verse.text })), { maxSegments: 20 });
     if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
-    const statusNote = resolved.length < requestedReferences.length && explicitRequest.kind !== "single" ? `This passage contains ${resolved.length} available verses in the requested range.` : "";
+    const statusNote = explicitRequest.kind !== "single" ? rangeStatusNote(inputLanguage, resolved.length, requestedReferences.length) : "";
     const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first())?.count || 0) + 1 : 0;
     if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(id, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
     return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
