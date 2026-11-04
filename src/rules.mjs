@@ -12,6 +12,7 @@ If Scripture does not explicitly provide an age, number, date, chronology, doctr
 
 JSON shape: {"mode":"conversation"|"fact","answer":"","verses":[{"reference":"Book chapter:verse","fragment":"exact contiguous phrase"}],"status":"","statusNote":"","truthAnchor":""}`;
 
-export function promptForTranslation(translation) {
-  return SYSTEM_PROMPT.replace('{{TRANSLATION}}', translation === 'twb' ? 'The Way Version (TWB)' : 'King James Version (KJV)');
+export function promptForTranslation(translation, language = 'en-US') {
+  const languageLabel = { 'en-US': 'English', 'en-GB': 'British English', es: 'Spanish', 'zh-CN': 'Simplified Chinese', hi: 'Hindi', bn: 'Bengali', pt: 'Portuguese', ja: 'Japanese', de: 'German', fr: 'French', ko: 'Korean', it: 'Italian', nl: 'Dutch' }[language] || 'English';
+  return `${SYSTEM_PROMPT.replace('{{TRANSLATION}}', translation === 'twb' ? 'The Way Version (TWB)' : 'King James Version (KJV)')}\n\nThe user's interface language is ${languageLabel}. Keep any status label or non-quotation metadata in that language when possible, but never translate or alter a quoted Bible fragment: verified Scripture text must remain exact. If a translated Bible text is not available for the selected translation, prefer a verified source-language fragment over an invented translation.`;
 }
