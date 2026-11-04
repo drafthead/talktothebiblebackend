@@ -59,7 +59,7 @@ export async function resolveVerse(reference, translation) {
 }
 
 export async function enrichVerses(verses, translation) {
-  const safeVerses = Array.isArray(verses) ? verses.slice(0, 12) : [];
+  const safeVerses = Array.isArray(verses) ? verses.slice(0, 20) : [];
   return (await Promise.all(safeVerses.map(async (verse) => {
     const reference = String(verse?.reference || "").trim().slice(0, 120);
     if (!reference) return null;

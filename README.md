@@ -17,6 +17,11 @@ evidence status when needed. The `answer` field is intentionally empty: the
 client renders authentic Scripture tiles and verified citation bubbles rather
 than model-written prose.
 
+Explicit references and ranges are deterministic. A request such as `Psalms
+1:5 to 10` returns every requested verse, up to 20 verses; a single reference
+returns that verse. These requests do not go through the model's short-answer
+selection step.
+
 ## Run locally
 
 ```bash
@@ -51,12 +56,12 @@ npx wrangler deploy
 ```
 
 The live health check reports the configured model and storage binding. Keep
-`OPENROUTER_MODEL`, `OPENROUTER_MAX_TOKENS`, `ALLOWED_ORIGINS`, and daily limits
+`OPENROUTER_MODEL`, `OPENROUTER_FALLBACK_MODEL`, `OPENROUTER_MAX_TOKENS`, `ALLOWED_ORIGINS`, and daily limits
 in `wrangler.toml`; never put the OpenRouter key in the web or mobile bundle.
 
 ## Model choice
 
-The default production model is `openai/gpt-4.1`: it is stronger at instruction following and factual synthesis than the former mini default, while remaining far cheaper than a flagship reasoning model. OpenRouter lists GPT-4.1 at $2/M input and $8/M output tokens, with cached input priced lower. Keep the model configurable through `OPENROUTER_MODEL` and benchmark any replacement against the golden tests before changing production.
+The default production model is `openai/gpt-4.1`: it is stronger at instruction following and factual synthesis than the former mini default, while remaining far cheaper than a flagship reasoning model. `openai/gpt-4.1-mini` is the automatic fallback for a transient provider/network failure. The fallback is only used when the primary request fails; it does not change the verified-verse contract. Keep both model names configurable through `OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL` and benchmark replacements against the golden tests before changing production.
 The model is never trusted as the Bible source: it selects references and
 fragments, then the backend resolves the exact KJV or The Way Version text and
 checks every fragment as a contiguous substring. Change the model only through
