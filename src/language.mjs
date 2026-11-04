@@ -5,8 +5,8 @@ const LANGUAGE_LABELS = {
 };
 
 const WORDS = {
-  es: ['hola', 'gracias', 'el', 'la', 'los', 'las', 'que', 'de', 'y', 'por', 'para', 'cómo', 'qué', 'dios', 'vida'],
-  pt: ['o', 'a', 'os', 'as', 'que', 'de', 'e', 'por', 'para', 'como', 'não', 'vida', 'deus'],
+  es: ['hola', 'gracias', 'el', 'la', 'los', 'las', 'que', 'de', 'y', 'por', 'para', 'cómo', 'qué', 'puedo', 'ese', 'hoy', 'dios', 'vida'],
+  pt: ['o', 'a', 'os', 'as', 'que', 'de', 'e', 'por', 'para', 'como', 'posso', 'esse', 'hoje', 'obrigado', 'não', 'vida', 'deus'],
   fr: ['le', 'la', 'les', 'des', 'que', 'de', 'et', 'pour', 'dans', 'comment', 'dieu', 'vie'],
   de: ['der', 'die', 'das', 'den', 'und', 'ist', 'nicht', 'für', 'wie', 'gott', 'leben'],
   it: ['il', 'la', 'gli', 'le', 'che', 'di', 'e', 'per', 'come', 'dio', 'vita'],
@@ -16,6 +16,10 @@ const WORDS = {
 
 export const languageLabel = (language) => LANGUAGE_LABELS[language] || LANGUAGE_LABELS['en-US'];
 
+function normalizeToken(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 export function detectLanguage(text, fallback = 'en-US') {
   const value = String(text || '').trim();
   if (!value) return fallback;
@@ -24,9 +28,9 @@ export function detectLanguage(text, fallback = 'en-US') {
   if (/[一-鿿]/u.test(value)) return 'zh-CN';
   if (/[ऀ-ॿ]/u.test(value)) return 'hi';
   if (/[ঀ-৿]/u.test(value)) return 'bn';
-  const words = value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || [];
+  const words = normalizeToken(value).match(/[a-z]+/g) || [];
   const scores = Object.fromEntries(Object.keys(WORDS).map((key) => [key, 0]));
-  for (const word of words) for (const [language, vocabulary] of Object.entries(WORDS)) if (vocabulary.includes(word)) scores[language] += 1;
+  for (const word of words) for (const [language, vocabulary] of Object.entries(WORDS)) if (vocabulary.some((entry) => normalizeToken(entry) === word)) scores[language] += 1;
   const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const [winner, score] = ranked[0];
   const runnerUp = ranked[1]?.[1] || 0;

@@ -20,20 +20,20 @@ function day() { return new Date().toISOString().slice(0, 10); }
 function now() { return new Date().toISOString(); }
 function parseBody(request) { return request.json().catch(() => null); }
 function deviceId(request, input) { return String(request.headers.get("x-anonymous-id") || input?.device_id || input?.session_id || "anonymous").trim().slice(0, 120) || "anonymous"; }
-function bookSlug(name) { const normalized = String(name || "").trim().toLowerCase().replace(/\s+/g, " "); const aliases = { psalm: "psalms", "song of songs": "song-of-solomon", "song of solomon": "song-of-solomon" }; return (aliases[normalized] || normalized).replace(/ /g, "-"); }
+function bookSlug(name) { const normalized = String(name || "").trim().toLowerCase().replace(/\s+/g, " "); const aliases = { psalm: "psalms", psalms: "psalms", salmo: "psalms", salmos: "psalms", juan: "john", mateo: "matthew", marcos: "mark", lucas: "luke", hechos: "acts", romanos: "romans", proverbios: "proverbs", "song of songs": "song-of-solomon", "song of solomon": "song-of-solomon" }; return (aliases[normalized] || normalized).replace(/ /g, "-"); }
 function parseReference(reference) { const match = String(reference || "").trim().match(/^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$/); return match ? { book: match[1], chapter: Number(match[2]), start: Number(match[3]), end: Number(match[4] || match[3]) } : null; }
 async function resolveVerse(reference, translation, env, language = 'en-US') {
   try {
     const localized = localizedEdition(language);
-    if (localized) return (await resolveLocalizedVerse(reference, language, env.MULTILINGUAL_BIBLE_BASE_URL || 'https://api.midvash.com')) || null;
     if (translation === "twb") {
       const parsed = parseReference(reference); if (!parsed) return null;
       const response = await fetch(`${String(env.THE_WAY_BASE_URL || "https://thewayversion.com").replace(/\/$/, "")}/app/data/books/${bookSlug(parsed.book)}.json`);
       if (!response.ok) return null;
       const book = await response.json(); const chapter = book?.chapters?.find((item) => Number(item.number) === parsed.chapter);
       const verses = chapter?.verses?.filter((item) => Number(item.number) >= parsed.start && Number(item.number) <= parsed.end) || [];
-      return verses.length ? { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end === parsed.start ? "" : `-${parsed.end}`}`, text: verses.map((item) => item.text).join(" ") } : null;
+      return verses.length ? { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end === parsed.start ? "" : `-${parsed.end}`}`, text: verses.map((item) => item.text).join(" "), sourceLabel: "The Way Version", sourceAttribution: "The Way Version; source text retrieved from the official edition.", sourceLanguage: "en-US" } : null;
     }
+    if (localized) return (await resolveLocalizedVerse(reference, language, env.MULTILINGUAL_BIBLE_BASE_URL || 'https://api.midvash.com')) || null;
     const response = await fetch(`${String(env.KJV_API_BASE_URL || "https://bible-api.com").replace(/\/$/, "")}/${encodeURIComponent(reference)}?translation=kjv`);
     if (!response.ok) return null;
     const payload = await response.json(); const text = String(payload?.text || "").replace(/\s+/g, " ").trim();
@@ -59,7 +59,9 @@ function recentReferences(messages) {
 }
 function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 119:105", "Proverbs 3:5", "Matthew 11:28", "Philippians 4:6", "Joshua 1:9", "Romans 8:28"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
 function isReferenceFollowUp(question) {
-  return /\b(that|this|these|those|the verse|what does (?:it|that|this) mean|explain|repeat|why did you|same passage)\b/i.test(question);
+  // A contextual follow-up is not permission to repeat the same card. Only an
+  // explicit request to repeat or revisit a passage may do that.
+  return /\b(?:repeat|say that again|read that again|quote that again|same passage|revisit that passage)\b/i.test(question);
 }
 
 async function recordRequest(env, id, sessionId, translation, messages, plus, profileMemory) {

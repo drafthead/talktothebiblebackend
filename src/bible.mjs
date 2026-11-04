@@ -58,7 +58,11 @@ async function resolveWay(reference) {
 export async function resolveVerse(reference, translation, language = 'en-US') {
   try {
     const localized = localizedEdition(language);
-    if (localized) return (await resolveLocalizedVerse(reference, language, process.env.MULTILINGUAL_BIBLE_BASE_URL)) || (translation === "twb" ? await resolveWay(reference) : await resolveKjv(reference));
+    // The Way Version is English source text. For a non-English Way request,
+    // resolve the verified Way passage first and translate it in the caller;
+    // do not silently replace it with a different localized edition.
+    if (translation === "twb") return await resolveWay(reference);
+    if (localized) return (await resolveLocalizedVerse(reference, language, process.env.MULTILINGUAL_BIBLE_BASE_URL)) || await resolveKjv(reference);
     return translation === "twb" ? await resolveWay(reference) : await resolveKjv(reference);
   } catch { return null; }
 }

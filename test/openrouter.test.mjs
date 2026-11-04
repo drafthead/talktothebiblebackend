@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { requestOpenRouter } from '../src/openrouter.mjs';
 import { parseExplicitVerseRequest, referencesForVerseRequest } from '../src/verse-request.mjs';
+import { detectLanguage } from '../src/language.mjs';
 
 test('expands explicit ranges and chapters without silently truncating at two verses', () => {
   const range = parseExplicitVerseRequest('Psalms 1:5 to 10');
@@ -10,6 +11,13 @@ test('expands explicit ranges and chapters without silently truncating at two ve
   assert.equal(referencesForVerseRequest(chapter).length, 20);
   const prefixed = parseExplicitVerseRequest('Give me Psalms 119:105-110');
   assert.deepEqual(prefixed, { book: 'Psalms', chapter: 119, start: 105, end: 110, kind: 'range' });
+  assert.deepEqual(parseExplicitVerseRequest('Dame Juan 3:16'), { book: 'John', chapter: 3, start: 16, end: 16, kind: 'single' });
+  assert.deepEqual(referencesForVerseRequest(parseExplicitVerseRequest('Salmos 1:5 hasta 10')), ['Psalms 1:5', 'Psalms 1:6', 'Psalms 1:7', 'Psalms 1:8', 'Psalms 1:9', 'Psalms 1:10']);
+});
+
+test('normalizes accented Spanish before comparing language vocabularies', () => {
+  assert.equal(detectLanguage('¿Cómo puedo practicar ese valor hoy?', 'es'), 'es');
+  assert.equal(detectLanguage('Como posso praticar esse valor hoje?', 'en-US'), 'pt');
 });
 
 test('tries the fallback model after a provider failure', async () => {
