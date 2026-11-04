@@ -64,7 +64,7 @@ async function chat(input, request) {
   const generated = normalizeModelResponse(parseModelContent(upstream?.choices?.[0]?.message?.content));
   const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3;
   let verses = verifyVerseMaterial(await enrichVerses(generated.verses.slice(0, requestedMax), translation));
-  if (!isReferenceFollowUp(question) && recentRefSet.size) { const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase())); if (fresh.length) verses = fresh; }
+  if (!isReferenceFollowUp(question) && recentRefSet.size) { const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase())); verses = fresh; }
   // A malformed model answer must not turn into a prose answer or a blank card.
   // This fallback remains entirely Scripture and is intentionally predictable.
   if (!verses.length) {

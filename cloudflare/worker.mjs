@@ -94,7 +94,7 @@ async function chat(request, env, input) {
   const generated = normalizeModelResponse(modelContent(upstream?.choices?.[0]?.message?.content)); const requestedMax = question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3; let verses = verifyVerseMaterial(await enrich(generated.verses.slice(0, requestedMax), translation, env));
   if (!isReferenceFollowUp(question) && recentRefSet.size) {
     const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase()));
-    if (fresh.length) verses = fresh;
+    verses = fresh;
   }
   if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env));
   const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first())?.count || 0) + 1 : 0;

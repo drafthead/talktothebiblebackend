@@ -4,7 +4,7 @@ function cleanBook(value) {
 }
 
 function stripRequestLead(value) {
-  return String(value || '').replace(/^\s*(?:please\s+)?(?:give\s+me|show\s+me|read|open|fetch|get)\s+/i, '').trim();
+  return String(value || '').replace(/^\s*(?:please\s+)?(?:give\s+me|show\s+me|read|open|fetch|get|send\s+me)\s+/i, '').trim();
 }
 
 // Explicit verse requests are deterministic: the model should not choose only
