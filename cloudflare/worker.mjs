@@ -6,6 +6,7 @@ import { requestOpenRouter } from "../src/openrouter.mjs";
 import { isGreetingQuestion, parseExplicitVerseRequest, referencesForVerseRequest, requestedVerseCount } from "../src/verse-request.mjs";
 import { localizedEdition, resolveLocalizedVerse } from "../src/multilingual-bible.mjs";
 import { translateWayVerses } from "../src/translate.mjs";
+import { recentReferences } from "../src/reference-history.mjs";
 
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 
@@ -47,16 +48,6 @@ async function enrich(verses, translation, env, language = 'en-US') {
   return (await Promise.all(items.map(async (item) => { const reference = String(item?.reference || "").trim(); const resolved = await resolveVerse(reference, translation, env, language); return resolved ? { ...resolved, fragment: String(item?.fragment || "").trim().slice(0, 500), note: "" } : null; }))).filter(Boolean);
 }
 function modelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return {}; } }
-function recentReferences(messages) {
-  const references = new Set();
-  for (const message of messages.filter((item) => item.role === "assistant")) {
-    for (const match of String(message.content || "").matchAll(/((?:\d\s+)?[A-Za-z][A-Za-z -]+\s+\d+:\d+(?:-\d+)?)/g)) {
-      const reference = canonicalReference(match[1]);
-      if (reference) references.add(reference.toLowerCase());
-    }
-  }
-  return references;
-}
 function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 119:105", "Proverbs 3:5", "Matthew 11:28", "Philippians 4:6", "Joshua 1:9", "Romans 8:28"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
 function rangeStatusNote(language, available, requested) {
   if (available >= requested) return "";
@@ -92,7 +83,7 @@ async function recordRequest(env, id, sessionId, translation, messages, plus, pr
 
 async function chat(request, env, input) {
   if (!env.OPENROUTER_API_KEY) return respond(request, env, 503, { error: "OpenRouter is not configured yet." });
-  const translation = input.translation === "twb" ? "twb" : "kjv"; const plus = input.plus === true; const id = deviceId(request, input); const sessionId = String(input.session_id || id).slice(0, 256); const messages = sanitizeMessages(Array.isArray(input.recent_messages) ? input.recent_messages : input.messages);
+  const translation = input.translation === "twb" ? "twb" : "kjv"; const plus = input.plus === true; const id = deviceId(request, input); const sessionId = String(input.session_id || id).slice(0, 256); const messages = sanitizeMessages(Array.isArray(input.recent_messages) ? input.recent_messages : input.messages).slice(-10);
   if (!messages.length || messages.at(-1).role !== "user") return respond(request, env, 400, { error: "A user question is required." });
   const limit = plus ? Math.max(1000, Number(env.PLUS_DAILY_REQUESTS || 1000)) : Math.max(1, Number(env.MAX_DAILY_REQUESTS || 30)); const today = day(); const storedUser = env.BIBLE_DB ? await env.BIBLE_DB.prepare("SELECT memory_text FROM users WHERE device_id = ?").bind(id).first() : null; const profileMemory = mergeUserMemory(storedUser?.memory_text, input.profile_context, messages.filter((message) => message.role === 'user').map((message) => message.content).join(' | '));
   if (env.BIBLE_DB) { const row = await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first(); if (Number(row?.count || 0) >= limit) return respond(request, env, 429, { error: "Today's answers are used up.", remaining: plus ? null : 0 }); }
@@ -111,7 +102,7 @@ async function chat(request, env, input) {
     if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(id, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
     return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
   }
-  const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the immediately preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Avoid these references from the immediately preceding answers unless no relevant alternative exists: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
+  const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the explicitly requested preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Do not reuse any reference from the last 10 messages unless the user explicitly asks for that passage by reference. Choose fresh, relevant references instead: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
   const requestedCount = requestedVerseCount(question);
   const minimumVerseCount = requestedCount || (isGreetingQuestion(question) ? 1 : 2);
   const countRule = requestedCount
@@ -132,8 +123,8 @@ async function chat(request, env, input) {
     verses = fresh;
   }
   if (verses.length < minimumVerseCount && !isGreetingQuestion(question)) {
-    const existingReferences = verses.map((verse) => verse.reference).join(", ") || "none";
-    const completionPayload = { ...payload, messages: [...payload.messages, { role: "system", content: "The previous draft was incomplete. Return a complete replacement list with at least " + minimumVerseCount + " distinct, relevant Bible references. Do not reuse these references unless no relevant alternative exists: " + existingReferences + ". Keep every item in the required JSON shape and use only verifiable Scripture." }] };
+    const existingReferences = [...new Set([...recentRefSet, ...verses.map((verse) => verse.reference.toLowerCase())])].join(", ") || "none";
+    const completionPayload = { ...payload, messages: [...payload.messages, { role: "system", content: "The previous draft was incomplete. Return a complete replacement list with at least " + minimumVerseCount + " distinct, relevant Bible references. Do not reuse these references unless the user explicitly requested that passage: " + existingReferences + ". Keep every item in the required JSON shape and use only verifiable Scripture." }] };
     const completion = await requestOpenRouter({ apiKey: env.OPENROUTER_API_KEY, primaryModel: model, fallbackModel, payload: completionPayload, timeoutMs: Math.max(1000, Number(env.OPENROUTER_TIMEOUT_MS || 6000)), referer: env.OPENROUTER_SITE_URL || "https://thewayversion.com", title: env.OPENROUTER_SITE_NAME || "Talk To The Bible" });
     const completionGenerated = completion ? normalizeModelResponse(modelContent(completion.body?.choices?.[0]?.message?.content)) : null;
     if (completionGenerated?.verses?.length) {
