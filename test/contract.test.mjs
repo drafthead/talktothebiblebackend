@@ -4,6 +4,7 @@ import { canonicalReference, preserveCompleteShortVerses, verifyVerseMaterial } 
 
 test("canonicalizes Psalm references before they reach the UI", () => {
   assert.equal(canonicalReference("1 Psalm 147:3"), "Psalms 147:3");
+  assert.equal(canonicalReference("Psalm 147:3"), "Psalms 147:3");
   assert.equal(canonicalReference(" Psalms   147:3 "), "Psalms 147:3");
 });
 
@@ -14,7 +15,7 @@ test("removes duplicate and nested fragments but keeps distinct same-verse fragm
     { reference: "Psalm 147:3", text: "He heals the broken in heart, and binds up their wounds.", fragment: "He heals the broken in heart" },
   ]);
   assert.equal(result.length, 1);
-  assert.equal(result[0].reference, "Psalm 147:3");
+  assert.equal(result[0].reference, "Psalms 147:3");
 });
 
 test("preserves separate fragments when they are not nested", () => {

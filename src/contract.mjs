@@ -17,7 +17,7 @@ export function normalizedQuote(value) {
 /** Normalize common model variants before a reference reaches the UI. */
 export function canonicalReference(value) {
   const reference = String(value || '').replace(/\s+/g, ' ').trim();
-  return reference.replace(/^\d+\s+(psalm|psalms)\b/i, 'Psalms');
+  return reference.replace(/^(?:\d+\s+)?psalms?\b/i, 'Psalms');
 }
 
 function fallbackFragment(text) {
