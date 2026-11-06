@@ -47,6 +47,14 @@ export function buildUserMemory(messages) {
   return sections.join("\n").slice(0, 3200);
 }
 
+export function mergeUserMemory(existing, ...sources) {
+  const parts = [existing, ...sources]
+    .map((value) => String(value || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (!parts.length) return '';
+  return buildUserMemory(parts.map((content) => ({ role: 'user', content }))).slice(0, 3200);
+}
+
 export function sanitizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
   return messages

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { requestOpenRouter } from '../src/openrouter.mjs';
-import { parseExplicitVerseRequest, referencesForVerseRequest } from '../src/verse-request.mjs';
+import { isGreetingQuestion, parseExplicitVerseRequest, referencesForVerseRequest, requestedVerseCount } from '../src/verse-request.mjs';
 import { detectLanguage } from '../src/language.mjs';
 
 test('expands explicit ranges and chapters without silently truncating at two verses', () => {
@@ -18,6 +18,14 @@ test('expands explicit ranges and chapters without silently truncating at two ve
 test('normalizes accented Spanish before comparing language vocabularies', () => {
   assert.equal(detectLanguage('¿Cómo puedo practicar ese valor hoy?', 'es'), 'es');
   assert.equal(detectLanguage('Como posso praticar esse valor hoje?', 'en-US'), 'pt');
+});
+
+test('recognizes explicit verse counts and greeting exceptions', () => {
+  assert.equal(requestedVerseCount('Give me five scriptures about Jesus'), 5);
+  assert.equal(requestedVerseCount('Show me 20 verses about courage'), 20);
+  assert.equal(requestedVerseCount('Give me 25 passages about hope'), 20);
+  assert.equal(isGreetingQuestion('Hello'), true);
+  assert.equal(isGreetingQuestion('Who is Job?'), false);
 });
 
 test('tries the fallback model after a provider failure', async () => {

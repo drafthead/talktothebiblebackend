@@ -42,6 +42,28 @@ function stripRequestLead(value) {
   return String(value || '').replace(/^\s*(?:please\s+)?(?:give\s+me|show\s+me|read|open|fetch|get|send\s+me|dame|muéstrame|muestrame)\s+/i, '').trim();
 }
 
+const NUMBER_WORDS = new Map([
+  ['one', 1], ['two', 2], ['three', 3], ['four', 4], ['five', 5],
+  ['six', 6], ['seven', 7], ['eight', 8], ['nine', 9], ['ten', 10],
+  ['eleven', 11], ['twelve', 12], ['thirteen', 13], ['fourteen', 14],
+  ['fifteen', 15], ['sixteen', 16], ['seventeen', 17], ['eighteen', 18],
+  ['nineteen', 19], ['twenty', 20],
+]);
+
+export function requestedVerseCount(question) {
+  const text = String(question || '').replace(/\s+/g, ' ').trim();
+  const match = text.match(/\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:different\s+)?(?:scriptures?|verses?|passages?)\b/i);
+  if (!match) return undefined;
+  const raw = match[1].toLowerCase();
+  const count = NUMBER_WORDS.get(raw) || Number(raw);
+  return Number.isFinite(count) && count > 0 ? Math.min(20, count) : undefined;
+}
+
+export function isGreetingQuestion(question) {
+  const text = String(question || '').toLowerCase().replace(/[.,!?]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^(hi|hello|hey|yo|good morning|good afternoon|good evening|hola|bonjour|salut|안녕하세요|こんにちは|你好)$/.test(text);
+}
+
 // Explicit verse requests are deterministic: the model should not choose only
 // a couple of examples when the user asked for a passage or chapter range.
 export function parseExplicitVerseRequest(question) {
