@@ -4,6 +4,11 @@ import { localizedEdition, resolveLocalizedVerse } from "./multilingual-bible.mj
 
 const wayCache = new Map();
 const BOOK_ALIASES = new Map([["psalm", "psalms"], ["song of songs", "song-of-solomon"], ["song of solomon", "song-of-solomon"]]);
+function cleanVerseText(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  const quoteCount = (text.match(/"/g) || []).length;
+  return quoteCount % 2 === 1 && text.endsWith('"') ? text.slice(0, -1).trimEnd() : text;
+}
 
 function bookSlug(name) {
   const normalized = name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -25,7 +30,7 @@ async function fetchJson(url) {
 async function resolveKjv(reference) {
   const base = process.env.KJV_API_BASE_URL || "https://bible-api.com";
   const payload = await fetchJson(`${base.replace(/\/$/, "")}/${encodeURIComponent(reference)}?translation=kjv`);
-  const text = String(payload?.text || "").replace(/\s+/g, " ").trim();
+  const text = cleanVerseText(payload?.text);
   return text ? { reference: payload.reference || reference, text, sourceLabel: 'King James Version', sourceAttribution: 'King James Version (KJV), Public Domain.', sourceLanguage: 'en-US' } : null;
 }
 
@@ -52,7 +57,7 @@ async function resolveWay(reference) {
   const chapter = book?.chapters?.find((item) => Number(item.number) === parsed.chapter);
   const verses = chapter?.verses?.filter((item) => Number(item.number) >= parsed.start && Number(item.number) <= parsed.end) || [];
   if (!verses.length) return null;
-  return { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end === parsed.start ? "" : `-${parsed.end}`}`, text: verses.map((verse) => verse.text).join(" "), sourceLabel: 'The Way Version', sourceLanguage: 'en-US' };
+  return { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end === parsed.start ? "" : `-${parsed.end}`}`, text: cleanVerseText(verses.map((verse) => verse.text).join(" ")), sourceLabel: 'The Way Version', sourceLanguage: 'en-US' };
 }
 
 export async function resolveVerse(reference, translation, language = 'en-US') {
@@ -74,6 +79,7 @@ export async function enrichVerses(verses, translation, language = 'en-US') {
     if (!reference) return null;
     const resolved = await resolveVerse(reference, translation, language);
     if (!resolved) return null;
-    return { reference: resolved.reference, text: resolved.text, fragment: String(verse?.fragment || "").trim().slice(0, 500), note: "", sourceLabel: resolved.sourceLabel, sourceAttribution: resolved.sourceAttribution, sourceLanguage: resolved.sourceLanguage };
+    const selectedText = verse?.fragment || verse?.text || "";
+    return { reference: resolved.reference, text: resolved.text, fragment: String(selectedText).trim().slice(0, 500), note: "", sourceLabel: resolved.sourceLabel, sourceAttribution: resolved.sourceAttribution, sourceLanguage: resolved.sourceLanguage };
   }))).filter(Boolean);
 }

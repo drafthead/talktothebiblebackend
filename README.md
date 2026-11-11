@@ -87,8 +87,10 @@ turns exact,
 and turns older user turns into bounded categories for situations, relationships,
 concerns, preferences, and general life context. It does not call a second
 summarizer model, so compaction adds no extra model request. Responses are
-capped at 700 tokens by default, and the backend enforces 30 anonymous answers
-per day. The frontend also shows and persists the same 30-answer daily budget.
+capped at 700 tokens by default, and the backend enforces 20 anonymous typed
+answers per day. Voice input is metered separately by the native clients at
+three free voice-enabled messages before Plus is required. The frontend shows
+these as separate allowances so a voice limit never blocks typed questions.
 
 Each request can also carry a bounded device-level profile context collected
 from the user's saved chats. The Worker persists that profile in D1 so a new
@@ -97,7 +99,7 @@ current design deliberately does not cite profile context; only verified verse
 fragments appear in the answer. A future summarizer can update the profile
 asynchronously, but should never replace the exact recent turns.
 
-Free accounts receive 30 answers per day. Plus displays “Unlimited chats” and
+Free accounts receive 20 typed answers per day. Plus displays “Unlimited chats” and
 uses a 1,000-answer soft limit per day (`PLUS_DAILY_REQUESTS`) to prevent abuse.
 The native client passes its device identifier and Plus state; production
 entitlement verification should be added before treating the client flag as a
@@ -113,6 +115,14 @@ but duplicate or nested repeats are removed by the verification layer. The
 server rejects unresolved references and non-contiguous fragments, and falls
 back to one authentic verse if the model response cannot be verified. Citation
 taps open the full verse; the tile itself never becomes a second prose answer.
+
+Safety is the intentional exception to the verse-only presentation. When a
+message contains direct self-harm or suicide language, the response includes a
+short practical safety note beside the verified Scripture and points to 988 in
+the U.S. or Canada, or the user's local crisis and emergency services elsewhere.
+For contested questions such as divorce and remarriage, the backend requests
+balanced passages and labels the interpretation as disputed rather than stating
+one tradition's conclusion as settled fact.
 
 Direct biblical fact questions additionally return one of the five controlled
 `Biblical status` labels plus an optional short `statusNote`. This is rendered
