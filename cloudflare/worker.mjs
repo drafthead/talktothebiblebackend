@@ -23,6 +23,60 @@ function day() { return new Date().toISOString().slice(0, 10); }
 function now() { return new Date().toISOString(); }
 function parseBody(request) { return request.json().catch(() => null); }
 function deviceId(request, input) { return String(request.headers.get("x-anonymous-id") || input?.device_id || input?.session_id || "anonymous").trim().slice(0, 120) || "anonymous"; }
+function squareConfigured(env) { return Boolean(env.KDROP_BILLING_BRIDGE_URL && env.KDROP_BILLING_SECRET && env.SQUARE_LOCATION_ID && env.SQUARE_APPLICATION_ID); }
+function squareHeaders(env) { return { Authorization: `Bearer ${env.SQUARE_ACCESS_TOKEN}`, "Content-Type": "application/json", "Square-Version": env.SQUARE_API_VERSION || "2026-09-16" }; }
+async function squareRequest(env, path, body, method = "POST") {
+  return fetch(`https://connect.squareup.com/v2${path}`, { method, headers: squareHeaders(env), body: body === undefined ? undefined : JSON.stringify(body) });
+}
+function subscriptionPayload(row) {
+  if (!row) return { active: false, status: "none" };
+  return { active: ["ACTIVE", "PENDING", "PAUSED"].includes(String(row.status || "").toUpperCase()), status: row.status, email: row.email, planId: row.plan_id, currentPeriodEnd: row.current_period_end, canceledDate: row.canceled_date };
+}
+async function billingConfig(request, env) {
+  return respond(request, env, 200, { enabled: squareConfigured(env), applicationId: env.SQUARE_APPLICATION_ID || null, locationId: env.SQUARE_LOCATION_ID || null, planName: env.SQUARE_PLAN_NAME || "Talk To The Bible Plus", priceMinor: Number(env.SQUARE_PLAN_PRICE_MINOR || 499), currency: env.SQUARE_PLAN_CURRENCY || "USD", interval: "month" });
+}
+async function billingStatus(request, env, input) {
+  if (!env.BIBLE_DB) return respond(request, env, 200, { active: false, status: "unconfigured" });
+  const id = deviceId(request, input);
+  const row = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE device_id = ? LIMIT 1").bind(id).first();
+  return respond(request, env, 200, subscriptionPayload(row));
+}
+async function billingSubscribe(request, env, input) {
+  if (!squareConfigured(env)) return respond(request, env, 503, { error: "Web billing is not configured yet. Add the dedicated Square plan and Worker secrets first." });
+  if (!env.BIBLE_DB) return respond(request, env, 503, { error: "Billing storage is not configured yet." });
+  const id = deviceId(request, input);
+  const email = String(input?.email || "").trim().toLowerCase();
+  const displayName = String(input?.display_name || "Talk To The Bible user").trim().slice(0, 200);
+  const sourceId = String(input?.source_id || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return respond(request, env, 400, { error: "A valid email is required for receipts and subscription management." });
+  if (!sourceId || sourceId.length > 16384) return respond(request, env, 400, { error: "Square did not return a valid payment token." });
+  const existing = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE device_id = ? LIMIT 1").bind(id).first();
+  if (existing && ["ACTIVE", "PENDING", "PAUSED"].includes(String(existing.status || "").toUpperCase())) return respond(request, env, 409, { error: "Plus is already active for this browser.", subscription: subscriptionPayload(existing) });
+  const bridgeResponse = await fetch(`${String(env.KDROP_BILLING_BRIDGE_URL).replace(/\/$/, '')}/subscribe`, { method: "POST", headers: { "content-type": "application/json", "x-talk-bible-secret": env.KDROP_BILLING_SECRET }, body: JSON.stringify({ email, display_name: displayName, source_id: sourceId }) });
+  const bridgeJson = await bridgeResponse.json().catch(() => ({}));
+  if (!bridgeResponse.ok || !bridgeJson.subscriptionId) return respond(request, env, bridgeResponse.status === 402 ? 402 : 502, { error: bridgeJson.message || "Square could not start the monthly subscription. No subscription was created.", details: bridgeJson.details || null });
+  const customerId = bridgeJson.customerId;
+  const cardId = bridgeJson.cardId;
+  const squareSubscription = { id: bridgeJson.subscriptionId, status: bridgeJson.status || "PENDING", charged_through_date: bridgeJson.currentPeriodEnd || null, canceled_date: bridgeJson.canceledDate || null };
+  const timestamp = now();
+  await env.BIBLE_DB.prepare("INSERT INTO web_subscriptions(device_id,email,display_name,square_customer_id,square_card_id,square_subscription_id,plan_id,status,current_period_end,canceled_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,square_customer_id=excluded.square_customer_id,square_card_id=excluded.square_card_id,square_subscription_id=excluded.square_subscription_id,plan_id=excluded.plan_id,status=excluded.status,current_period_end=excluded.current_period_end,canceled_date=excluded.canceled_date,updated_at=excluded.updated_at").bind(id, email, displayName, customerId, cardId, squareSubscription.id, env.SQUARE_PLAN_NAME || "Talk To The Bible Plus", squareSubscription.status || "ACTIVE", squareSubscription.charged_through_date || null, squareSubscription.canceled_date || null, timestamp, timestamp).run();
+  const row = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE device_id = ? LIMIT 1").bind(id).first();
+  return respond(request, env, 200, { ok: true, subscription: subscriptionPayload(row) });
+}
+async function billingCancel(request, env, input) {
+  if (!env.BIBLE_DB) return respond(request, env, 503, { error: "Billing storage is not configured yet." });
+  const id = deviceId(request, input);
+  const row = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE device_id = ? LIMIT 1").bind(id).first();
+  if (!row?.square_subscription_id) return respond(request, env, 404, { error: "No active web subscription was found." });
+  if (!squareConfigured(env)) return respond(request, env, 503, { error: "Web billing is not configured yet." });
+  const response = await fetch(`${String(env.KDROP_BILLING_BRIDGE_URL).replace(/\/$/, '')}/cancel`, { method: "POST", headers: { "content-type": "application/json", "x-talk-bible-secret": env.KDROP_BILLING_SECRET }, body: JSON.stringify({ subscription_id: row.square_subscription_id }) });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) return respond(request, env, 502, { error: json.message || "Square could not schedule cancellation.", details: json.details || null });
+  const canceledDate = json.canceledDate || row.canceled_date || day();
+  await env.BIBLE_DB.prepare("UPDATE web_subscriptions SET status=?, canceled_date=?, updated_at=? WHERE device_id=?").bind(json.status || "CANCELED", canceledDate, now(), id).run();
+  const updated = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE device_id = ? LIMIT 1").bind(id).first();
+  return respond(request, env, 200, { ok: true, subscription: subscriptionPayload(updated) });
+}
 function bookSlug(name) { const normalized = String(name || "").trim().toLowerCase().replace(/\s+/g, " "); const aliases = { psalm: "psalms", psalms: "psalms", salmo: "psalms", salmos: "psalms", juan: "john", mateo: "matthew", marcos: "mark", lucas: "luke", hechos: "acts", romanos: "romans", proverbios: "proverbs", "song of songs": "song-of-solomon", "song of solomon": "song-of-solomon" }; return (aliases[normalized] || normalized).replace(/ /g, "-"); }
 function parseReference(reference) { const match = String(reference || "").trim().match(/^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$/); return match ? { book: match[1], chapter: Number(match[2]), start: Number(match[3]), end: Number(match[4] || match[3]) } : null; }
 function cleanVerseText(value) { const text = String(value || "").replace(/\s+/g, " ").trim(); const quoteCount = (text.match(/"/g) || []).length; return quoteCount % 2 === 1 && text.endsWith('"') ? text.slice(0, -1).trimEnd() : text; }
@@ -86,7 +140,7 @@ async function recordRequest(env, id, sessionId, translation, messages, plus, pr
 
 async function chat(request, env, input) {
   if (!env.OPENROUTER_API_KEY) return respond(request, env, 503, { error: "OpenRouter is not configured yet." });
-  const translation = input.translation === "twb" ? "twb" : "kjv"; const plus = input.plus === true; const id = deviceId(request, input); const sessionId = String(input.session_id || id).slice(0, 256); const messages = sanitizeMessages(Array.isArray(input.recent_messages) ? input.recent_messages : input.messages).slice(-10);
+  const translation = input.translation === "twb" ? "twb" : "kjv"; const id = deviceId(request, input); const sessionId = String(input.session_id || id).slice(0, 256); const messages = sanitizeMessages(Array.isArray(input.recent_messages) ? input.recent_messages : input.messages).slice(-10); const webSubscription = input.platform === "web" && env.BIBLE_DB ? await env.BIBLE_DB.prepare("SELECT status FROM web_subscriptions WHERE device_id = ? LIMIT 1").bind(id).first() : null; const webPlus = ["ACTIVE", "PENDING", "PAUSED"].includes(String(webSubscription?.status || "").toUpperCase()); const plus = input.platform === "web" ? webPlus : input.plus === true;
   if (!messages.length || messages.at(-1).role !== "user") return respond(request, env, 400, { error: "A user question is required." });
   const limit = plus ? Math.max(1000, Number(env.PLUS_DAILY_REQUESTS || 1000)) : Math.max(1, Number(env.MAX_DAILY_REQUESTS || 20)); const today = day(); const storedUser = env.BIBLE_DB ? await env.BIBLE_DB.prepare("SELECT memory_text FROM users WHERE device_id = ?").bind(id).first() : null; const profileMemory = mergeUserMemory(storedUser?.memory_text, input.profile_context, messages.filter((message) => message.role === 'user').map((message) => message.content).join(' | '));
   if (env.BIBLE_DB) { const row = await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(id, today).first(); if (Number(row?.count || 0) >= limit) return respond(request, env, 429, { error: "Today's answers are used up.", remaining: plus ? null : 0 }); }
@@ -160,4 +214,21 @@ async function chat(request, env, input) {
 
 async function resolveReferences(request, env, input) { const translation = input.translation === "twb" ? "twb" : "kjv"; const language = String(input.language || 'en-US').slice(0, 12); const references = Array.isArray(input.references) ? input.references.filter((item) => typeof item === "string").slice(0, 20) : []; const fragments = Array.isArray(input.fragments) ? input.fragments : []; const verses = verifyVerseMaterial(await enrich(references.map((reference, index) => ({ reference, fragment: fragments[index] || "" })), translation, env, language)); return respond(request, env, 200, { translation, verses }); }
 
-export default { async fetch(request, env) { if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(request, env) }); const url = new URL(request.url); if (request.method === "GET" && url.pathname === "/health") return respond(request, env, 200, { ok: true, service: "talk-to-the-bible-api", model: env.OPENROUTER_MODEL || "openai/gpt-4.1-mini", storage: env.BIBLE_DB ? "d1" : "unconfigured" }); if (request.method === "GET" && url.pathname === "/") return respond(request, env, 200, { service: "talk-to-the-bible-api", chat: "/api/chat", verses: "/api/verses" }); if (request.method !== "POST") return respond(request, env, 404, { error: "Not found" }); const input = await parseBody(request); if (!input) return respond(request, env, 400, { error: "Invalid request." }); if (url.pathname === "/api/chat") return chat(request, env, input); if (url.pathname === "/api/verses") return resolveReferences(request, env, input); return respond(request, env, 404, { error: "Not found" }); } };
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(request, env) });
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/health") return respond(request, env, 200, { ok: true, service: "talk-to-the-bible-api", model: env.OPENROUTER_MODEL || "openai/gpt-4.1-mini", storage: env.BIBLE_DB ? "d1" : "unconfigured", billing: squareConfigured(env) ? "square-ready" : "square-not-configured" });
+    if (request.method === "GET" && url.pathname === "/") return respond(request, env, 200, { service: "talk-to-the-bible-api", chat: "/api/chat", verses: "/api/verses", billing: "/api/billing" });
+    if (request.method === "GET" && url.pathname === "/api/billing/config") return billingConfig(request, env);
+    const input = await parseBody(request);
+    if (request.method === "GET" && url.pathname === "/api/billing/subscription") return billingStatus(request, env, { device_id: url.searchParams.get("device_id") });
+    if (request.method === "POST" && url.pathname === "/api/billing/subscribe") return billingSubscribe(request, env, input || {});
+    if (request.method === "POST" && url.pathname === "/api/billing/cancel") return billingCancel(request, env, input || {});
+    if (request.method !== "POST") return respond(request, env, 404, { error: "Not found" });
+    if (!input) return respond(request, env, 400, { error: "Invalid request." });
+    if (url.pathname === "/api/chat") return chat(request, env, input);
+    if (url.pathname === "/api/verses") return resolveReferences(request, env, input);
+    return respond(request, env, 404, { error: "Not found" });
+  }
+};

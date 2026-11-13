@@ -18,6 +18,13 @@ PLUS_DAILY_REQUESTS = "1000"
 THE_WAY_BASE_URL = "https://thewayversion.com"
 KJV_API_BASE_URL = "https://bible-api.com"
 MULTILINGUAL_BIBLE_BASE_URL = "https://api.midvash.com"
+SQUARE_PLAN_NAME = "Talk To The Bible Plus"
+SQUARE_PLAN_PRICE_MINOR = "499"
+SQUARE_PLAN_CURRENCY = "USD"
+PUBLIC_BILLING_SITE_URL = "https://thewayversion.com"
+SQUARE_APPLICATION_ID = "sq0idp-LiZZjiZZiX6WXE4X8P_fFw"
+SQUARE_LOCATION_ID = "LJ8MN6PD32KY1"
+KDROP_BILLING_BRIDGE_URL = "https://kdrop.skin/api/internal/talk-to-the-bible"
 
 # Run `wrangler d1 create talk-to-the-bible-db`, then replace the placeholder
 # below before the first deploy. The OpenRouter key is a Worker secret, not a
