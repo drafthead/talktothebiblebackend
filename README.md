@@ -9,8 +9,11 @@ resolves verse text from the selected translation, and exposes:
 - `GET /health`
 - `POST /api/chat`
 - `POST /api/verses` for switching displayed verse text between KJV and The Way Version
+- `GET /api/auth/session`
+- `POST /api/auth/register`, `/api/auth/login`, and `/api/auth/logout`
+- `POST /api/auth/test-premium` for non-billing QA only
 
-The request body is `{ translation: "kjv" | "twb", device_id, session_id, plus, summary, profile_context, recent_messages }`.
+The request body is `{ translation: "kjv" | "twb", device_id, session_id, platform, plus, summary, profile_context, recent_messages }`.
 Clients send the latest three user/assistant turns exactly and a bounded summary of older turns. The Worker also compacts legacy `messages` requests for older clients.
 The response contains resolved verses, translation, model, and the direct-question
 evidence status when needed. The `answer` field is intentionally empty: the
@@ -99,11 +102,28 @@ current design deliberately does not cite profile context; only verified verse
 fragments appear in the answer. A future summarizer can update the profile
 asynchronously, but should never replace the exact recent turns.
 
-Free accounts receive 20 typed answers per day. Plus displays “Unlimited chats” and
+Anonymous web visitors receive the first three chats without an account. After
+that preview, the web client requires an account and the Worker counts the free
+daily allowance against the account, so it is not reset simply by clearing a
+browser identifier. Free accounts receive 20 typed answers per day. Plus displays “Unlimited chats” and
 uses a 1,000-answer soft limit per day (`PLUS_DAILY_REQUESTS`) to prevent abuse.
 The native client passes its device identifier and Plus state; production
 entitlement verification should be added before treating the client flag as a
 security boundary.
+
+### Web accounts and billing QA
+
+Web registration accepts a username, email, and password. Passwords are stored
+as salted PBKDF2-SHA-256 hashes with 100,000 derivation iterations, never in plaintext. Sessions use random opaque
+tokens stored as SHA-256 hashes in D1 and expire after 30 days. A signed-in
+account is required before web Plus checkout, and the account ID is stored on
+the web subscription so cancellation and status checks follow the account.
+
+For local or controlled QA only, the Worker may expose `TEST_PREMIUM_CODE`.
+With a signed-in account, opening the web app with `?code=385` activates a
+non-billing test entitlement for that session. It must not be described as a
+payment or enabled as a public customer feature. Remove or rotate the variable
+before a public launch if the QA bypass is no longer needed.
 
 ## Scripture Cipher contract
 
