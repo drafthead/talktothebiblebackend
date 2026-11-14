@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS chats (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id TEXT NOT NULL,
+  account_id TEXT,
   session_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   content TEXT NOT NULL,
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS daily_usage (
 );
 
 CREATE INDEX IF NOT EXISTS chats_device_created_idx ON chats(device_id, created_at);
+CREATE INDEX IF NOT EXISTS chats_account_created_idx ON chats(account_id, created_at);
 
 CREATE TABLE IF NOT EXISTS web_subscriptions (
   device_id TEXT PRIMARY KEY,
@@ -62,7 +64,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  test_premium INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS account_sessions (
