@@ -43,10 +43,10 @@ async function identity(request, env, input) {
   const token = accountToken(request);
   if (!env.BIBLE_DB || !token) return { deviceId: id, account: null, token: "", testPremium: false };
   const tokenHash = await sha256(token);
-  const row = await env.BIBLE_DB.prepare("SELECT s.token_hash, s.test_premium, s.expires_at, a.id, a.username, a.email FROM account_sessions s JOIN accounts a ON a.id = s.account_id WHERE s.token_hash = ? LIMIT 1").bind(tokenHash).first();
+  const row = await env.BIBLE_DB.prepare("SELECT s.token_hash, s.test_premium AS session_test_premium, s.expires_at, a.id, a.username, a.email, a.test_premium AS account_test_premium FROM account_sessions s JOIN accounts a ON a.id = s.account_id WHERE s.token_hash = ? LIMIT 1").bind(tokenHash).first();
   if (!row || new Date(row.expires_at).getTime() <= Date.now()) return { deviceId: id, account: null, token: "", testPremium: false };
   await env.BIBLE_DB.prepare("UPDATE account_sessions SET last_seen_at = ? WHERE token_hash = ?").bind(now(), tokenHash).run();
-  return { deviceId: id, account: { id: row.id, username: row.username, email: row.email }, token, tokenHash, testPremium: Number(row.test_premium || 0) === 1 };
+  return { deviceId: id, account: { id: row.id, username: row.username, email: row.email }, token, tokenHash, testPremium: Number(row.session_test_premium || 0) === 1 || Number(row.account_test_premium || 0) === 1 };
 }
 async function createSession(env, accountId, testPremium = false) {
   const token = randomToken(); const timestamp = now(); const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString();
@@ -56,6 +56,7 @@ async function createSession(env, accountId, testPremium = false) {
 async function linkDevice(env, accountId, id) {
   if (!env.BIBLE_DB || !id || id === "anonymous") return;
   await env.BIBLE_DB.prepare("INSERT INTO account_devices(account_id,device_id,created_at,updated_at) VALUES (?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET account_id=excluded.account_id,updated_at=excluded.updated_at").bind(accountId, id, now(), now()).run();
+  await env.BIBLE_DB.prepare("UPDATE chats SET account_id = ? WHERE device_id = ? AND account_id IS NULL").bind(accountId, id).run();
   await env.BIBLE_DB.prepare("UPDATE web_subscriptions SET account_id = ? WHERE device_id = ? AND account_id IS NULL").bind(accountId, id).run();
 }
 function squareConfigured(env) { return Boolean(env.KDROP_BILLING_BRIDGE_URL && env.KDROP_BILLING_SECRET && env.SQUARE_LOCATION_ID && env.SQUARE_APPLICATION_ID); }
@@ -92,7 +93,8 @@ async function loginAccount(request, env, input) {
   if (!row || (await passwordHash(password, row.password_salt)) !== String(row.password_hash || "")) return respond(request, env, 401, { error: "That email and password do not match." });
   const account = { id: row.id, username: row.username, email: row.email }; const token = await createSession(env, account.id); await linkDevice(env, account.id, deviceId(request, input));
   const subscription = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE account_id = ? OR device_id = ? LIMIT 1").bind(account.id, deviceId(request, input)).first();
-  return respond(request, env, 200, { ok: true, account: accountPayload(account), token, testPremium: false, subscription: subscriptionPayload(subscription) });
+  const testPremium = Number(row.test_premium || 0) === 1;
+  return respond(request, env, 200, { ok: true, account: accountPayload(account), token, testPremium, subscription: testPremium ? { active: true, status: "TEST_ACTIVE", email: account.email } : subscriptionPayload(subscription) });
 }
 async function authSession(request, env, input) {
   const current = await identity(request, env, input); if (!current.account) return respond(request, env, 200, { authenticated: false });
@@ -106,8 +108,29 @@ async function logoutAccount(request, env, input) {
 async function enableTestPremium(request, env, input) {
   if (!env.BIBLE_DB || !env.TEST_PREMIUM_CODE || String(input?.code || "") !== String(env.TEST_PREMIUM_CODE)) return respond(request, env, 403, { error: "That testing code is not available." });
   const current = await identity(request, env, input); if (!current.account || !current.tokenHash) return respond(request, env, 401, { error: "Create or sign in to an account before using the testing code." });
+  await env.BIBLE_DB.prepare("UPDATE accounts SET test_premium = 1, updated_at = ? WHERE id = ?").bind(now(), current.account.id).run();
   await env.BIBLE_DB.prepare("UPDATE account_sessions SET test_premium = 1, last_seen_at = ? WHERE token_hash = ?").bind(now(), current.tokenHash).run();
   return authResponse(request, env, current.account, current.token, true);
+}
+async function accountChats(request, env, input) {
+  const current = await identity(request, env, input);
+  if (!current.account || !env.BIBLE_DB) return respond(request, env, 401, { error: "Sign in to load your conversations." });
+  const rows = await env.BIBLE_DB.prepare("SELECT session_id, role, content, translation, created_at FROM chats WHERE account_id = ? ORDER BY created_at ASC, id ASC LIMIT 2000").bind(current.account.id).all();
+  const grouped = new Map();
+  for (const row of rows.results || []) {
+    const sessionId = String(row.session_id || "");
+    if (!sessionId) continue;
+    const session = grouped.get(sessionId) || { id: sessionId, title: "New conversation", messages: [], updatedAt: 0 };
+    const content = String(row.content || "").trim();
+    const message = { role: row.role, content, translation: row.translation, createdAt: row.created_at };
+    const previous = session.messages[session.messages.length - 1];
+    if (content && (!previous || previous.role !== message.role || previous.content !== content)) session.messages.push(message);
+    session.updatedAt = Math.max(session.updatedAt, Date.parse(row.created_at) || 0);
+    if (row.role === "user" && session.title === "New conversation") session.title = content.slice(0, 80) || session.title;
+    grouped.set(sessionId, session);
+  }
+  const sessions = [...grouped.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 20);
+  return respond(request, env, 200, { authenticated: true, sessions });
 }
 async function billingConfig(request, env) {
   return respond(request, env, 200, { enabled: squareConfigured(env), applicationId: env.SQUARE_APPLICATION_ID || null, locationId: env.SQUARE_LOCATION_ID || null, planName: env.SQUARE_PLAN_NAME || "Talk To The Bible Plus", priceMinor: Number(env.SQUARE_PLAN_PRICE_MINOR || 499), currency: env.SQUARE_PLAN_CURRENCY || "USD", interval: "month" });
@@ -212,16 +235,16 @@ function isReferenceFollowUp(question) {
   return /\b(?:repeat|say that again|read that again|quote that again|same passage|revisit that passage)\b/i.test(question);
 }
 
-async function recordRequest(env, id, sessionId, translation, messages, plus, profileMemory) {
+async function recordRequest(env, id, accountId, sessionId, translation, messages, plus, profileMemory) {
   if (!env.BIBLE_DB) return;
   const timestamp = now();
   await env.BIBLE_DB.prepare("INSERT INTO users (device_id, created_at, updated_at, translation, plus, memory_text) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET updated_at=excluded.updated_at, translation=excluded.translation, plus=excluded.plus, memory_text=CASE WHEN excluded.memory_text <> '' THEN excluded.memory_text ELSE users.memory_text END").bind(id, timestamp, timestamp, translation, plus ? 1 : 0, String(profileMemory || "").slice(0, 3200)).run();
-  for (const message of messages.slice(-2)) await env.BIBLE_DB.prepare("INSERT INTO chats (device_id, session_id, role, content, translation, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id, sessionId, message.role, message.content, translation, timestamp).run();
+  for (const message of messages.slice(-2)) await env.BIBLE_DB.prepare("INSERT INTO chats (device_id, account_id, session_id, role, content, translation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, accountId || null, sessionId, message.role, message.content, translation, timestamp).run();
 }
 
 async function chat(request, env, input) {
   if (!env.OPENROUTER_API_KEY) return respond(request, env, 503, { error: "OpenRouter is not configured yet." });
-  const translation = input.translation === "twb" ? "twb" : "kjv"; const current = await identity(request, env, input); const id = current.deviceId; const usageId = current.account ? `account:${current.account.id}` : id; const sessionId = String(input.session_id || id).slice(0, 256); const messages = sanitizeMessages(Array.isArray(input.recent_messages) ? input.recent_messages : input.messages).slice(-10); const webSubscription = input.platform === "web" && env.BIBLE_DB ? await env.BIBLE_DB.prepare("SELECT status FROM web_subscriptions WHERE account_id = ? OR device_id = ? LIMIT 1").bind(current.account?.id || "", id).first() : null; const webPlus = ["ACTIVE", "PENDING", "PAUSED"].includes(String(webSubscription?.status || "").toUpperCase()); const plus = input.platform === "web" ? (webPlus || current.testPremium) : input.plus === true;
+  const translation = input.translation === "twb" ? "twb" : "kjv"; const current = await identity(request, env, input); const id = current.deviceId; const usageId = current.account ? `account:${current.account.id}` : id; const sessionId = String(input.session_id || id).slice(0, 256); const messages = sanitizeMessages(Array.isArray(input.recent_messages) ? input.recent_messages : input.messages).slice(-10); const webSubscription = env.BIBLE_DB ? await env.BIBLE_DB.prepare("SELECT status FROM web_subscriptions WHERE account_id = ? OR device_id = ? LIMIT 1").bind(current.account?.id || "", id).first() : null; const webPlus = ["ACTIVE", "PENDING", "PAUSED"].includes(String(webSubscription?.status || "").toUpperCase()); const plus = webPlus || current.testPremium || input.plus === true;
   if (!messages.length || messages.at(-1).role !== "user") return respond(request, env, 400, { error: "A user question is required." });
   const limit = plus ? Math.max(1000, Number(env.PLUS_DAILY_REQUESTS || 1000)) : Math.max(1, Number(env.MAX_DAILY_REQUESTS || 20)); const today = day(); const storedUser = env.BIBLE_DB ? await env.BIBLE_DB.prepare("SELECT memory_text FROM users WHERE device_id = ?").bind(id).first() : null; const profileMemory = mergeUserMemory(storedUser?.memory_text, input.profile_context, messages.filter((message) => message.role === 'user').map((message) => message.content).join(' | '));
   if (env.BIBLE_DB) { const row = await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(usageId, today).first(); const used = Number(row?.count || 0); if (input.platform === "web" && !current.account && used >= Math.min(3, limit)) return respond(request, env, 401, { code: "ACCOUNT_REQUIRED", error: "Create a free account to continue using Talk To The Bible." }); if (used >= limit) return respond(request, env, 429, { error: "Today's answers are used up.", remaining: plus ? null : 0 }); }
@@ -237,7 +260,7 @@ async function chat(request, env, input) {
     if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
     const statusNote = explicitRequest.kind !== "single" ? rangeStatusNote(inputLanguage, resolved.length, requestedReferences.length) : "";
     const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(usageId, today).first())?.count || 0) + 1 : 0;
-    if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
+    if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run(); await recordRequest(env, id, current.account?.id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
     return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", safety: safetyConcern ? { type: "crisis", message: SAFETY_NOTE } : null, translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
   }
   const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the explicitly requested preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Do not reuse any reference from the last 10 messages unless the user explicitly asks for that passage by reference. Choose fresh, relevant references instead: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
@@ -286,7 +309,7 @@ async function chat(request, env, input) {
   if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env, inputLanguage));
   if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
   const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(usageId, today).first())?.count || 0) + 1 : 0;
-  if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run(); await recordRequest(env, id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
+  if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run(); await recordRequest(env, id, current.account?.id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
   const mode = contested || generated.mode === "fact" ? "fact" : "conversation";
   const status = contested ? "Biblical status: Disputed interpretation" : mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "";
   const statusNote = contested ? contested.statusNote : mode === "fact" ? generated.statusNote : "";
@@ -308,6 +331,7 @@ export default {
     if (request.method === "POST" && url.pathname === "/api/auth/login") return loginAccount(request, env, input || {});
     if (request.method === "POST" && url.pathname === "/api/auth/logout") return logoutAccount(request, env, input || {});
     if (request.method === "POST" && url.pathname === "/api/auth/test-premium") return enableTestPremium(request, env, input || {});
+    if (request.method === "GET" && url.pathname === "/api/auth/chats") return accountChats(request, env, { device_id: url.searchParams.get("device_id") });
     if (request.method === "GET" && url.pathname === "/api/billing/subscription") return billingStatus(request, env, { device_id: url.searchParams.get("device_id") });
     if (request.method === "POST" && url.pathname === "/api/billing/subscribe") return billingSubscribe(request, env, input || {});
     if (request.method === "POST" && url.pathname === "/api/billing/cancel") return billingCancel(request, env, input || {});

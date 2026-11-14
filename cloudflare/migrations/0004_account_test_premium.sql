@@ -1,0 +1,1 @@
+ALTER TABLE accounts ADD COLUMN test_premium INTEGER NOT NULL DEFAULT 0;
