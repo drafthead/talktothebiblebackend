@@ -73,13 +73,16 @@ function authResponse(request, env, account, token, testPremium = false) {
 }
 async function registerAccount(request, env, input) {
   if (!env.BIBLE_DB) return respond(request, env, 503, { error: "Account storage is not configured yet." });
-  const username = String(input?.username || "").trim(); const usernameLower = username.toLowerCase(); const email = String(input?.email || "").trim().toLowerCase(); const password = String(input?.password || "");
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,29}$/.test(username)) return respond(request, env, 400, { error: "Choose a username with 3 to 30 letters, numbers, dots, hyphens, or underscores." });
+  const email = String(input?.email || "").trim().toLowerCase(); const password = String(input?.password || "");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return respond(request, env, 400, { error: "Enter a valid email address." });
   if (password.length < 8 || password.length > 128) return respond(request, env, 400, { error: "Use a password between 8 and 128 characters." });
-  const existing = await env.BIBLE_DB.prepare("SELECT username_lower, email_lower FROM accounts WHERE username_lower = ? OR email_lower = ? LIMIT 1").bind(usernameLower, email).first();
-  if (existing?.username_lower === usernameLower) return respond(request, env, 409, { error: "That username is already in use." });
+  const existing = await env.BIBLE_DB.prepare("SELECT email_lower FROM accounts WHERE email_lower = ? LIMIT 1").bind(email).first();
   if (existing?.email_lower === email) return respond(request, env, 409, { error: "That email is already in use. Try signing in instead." });
+  const localPart = email.split("@")[0].replace(/[^a-z0-9_.-]/gi, "").slice(0, 20) || "reader";
+  let username = localPart.length >= 3 ? localPart : `reader${localPart}`;
+  const usernameTaken = await env.BIBLE_DB.prepare("SELECT id FROM accounts WHERE username_lower = ? LIMIT 1").bind(username.toLowerCase()).first();
+  if (usernameTaken) username = `${username.slice(0, 18)}${randomToken().slice(0, 4).toLowerCase()}`;
+  const usernameLower = username.toLowerCase();
   const account = { id: `acct_${randomToken().slice(0, 22)}`, username, email };
   const salt = randomToken(); const hash = await passwordHash(password, salt); const timestamp = now();
   await env.BIBLE_DB.prepare("INSERT INTO accounts(id,username,username_lower,email,email_lower,password_salt,password_hash,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(account.id, username, usernameLower, email, email, salt, hash, timestamp, timestamp).run();
