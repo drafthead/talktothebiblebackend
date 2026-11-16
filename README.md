@@ -11,6 +11,8 @@ resolves verse text from the selected translation, and exposes:
 - `POST /api/verses` for switching displayed verse text between KJV and The Way Version
 - `GET /api/auth/session`
 - `POST /api/auth/register`, `/api/auth/login`, and `/api/auth/logout`
+- `DELETE /api/auth/account` for authenticated in-app account deletion
+- `POST /api/account-deletion-request` for the public Android/web deletion request form
 - `POST /api/auth/test-premium` for non-billing QA only
 
 The request body is `{ translation: "kjv" | "twb", device_id, session_id, platform, plus, summary, profile_context, recent_messages }`.
@@ -19,6 +21,14 @@ The response contains resolved verses, translation, model, and the direct-questi
 evidence status when needed. The `answer` field is intentionally empty: the
 client renders authentic Scripture tiles and verified citation bubbles rather
 than model-written prose.
+
+Account deletion is destructive and requires an authenticated session in the
+mobile and web apps. The confirmation copy warns that deleting an account does
+not automatically cancel an Apple App Store or Google Play subscription. The
+public deletion request form is available at
+`https://thewayversion.com/talk-to-the-bible/account-deletion/`; requests are
+stored for processing and state that account data will be permanently deleted
+within 90 days.
 
 Explicit references and ranges are deterministic. A request such as `Psalms
 1:5 to 10` returns every requested verse, up to 20 verses; a single reference
