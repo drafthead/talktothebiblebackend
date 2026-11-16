@@ -158,14 +158,34 @@ async function enableTestPremium(request, env, input) {
 async function accountChats(request, env, input) {
   const current = await identity(request, env, input);
   if (!current.account || !env.BIBLE_DB) return respond(request, env, 401, { error: "Sign in to load your conversations." });
-  const rows = await env.BIBLE_DB.prepare("SELECT session_id, role, content, translation, created_at FROM chats WHERE account_id = ? ORDER BY created_at ASC, id ASC LIMIT 2000").bind(current.account.id).all();
+  const rows = await env.BIBLE_DB.prepare("SELECT session_id, role, content, response_json, translation, created_at FROM chats WHERE account_id = ? ORDER BY created_at ASC, id ASC LIMIT 2000").bind(current.account.id).all();
   const grouped = new Map();
   for (const row of rows.results || []) {
     const sessionId = String(row.session_id || "");
     if (!sessionId) continue;
     const session = grouped.get(sessionId) || { id: sessionId, title: "New conversation", messages: [], updatedAt: 0 };
     const content = String(row.content || "").trim();
-    const message = { role: row.role, content, translation: row.translation, createdAt: row.created_at };
+    const storedResponse = row.role === "assistant" ? parseStoredResponse(row.response_json) : null;
+    const legacyVerses = row.role === "assistant" && !storedResponse ? legacyVersesFromContent(content, row.translation) : [];
+    const restored = storedResponse || (legacyVerses.length ? { verses: legacyVerses, translation: row.translation } : null);
+    const message = {
+      role: row.role,
+      content,
+      translation: row.translation,
+      createdAt: row.created_at,
+      ...(restored ? {
+        answer: String(restored.answer || ""),
+        verses: Array.isArray(restored.verses) ? restored.verses : [],
+        status: String(restored.status || ""),
+        statusNote: String(restored.statusNote || ""),
+        safety: restored.safety || null,
+        sourceLabel: String(restored.sourceLabel || ""),
+        sourceAttribution: String(restored.sourceAttribution || ""),
+        detectedLanguage: String(restored.detectedLanguage || ""),
+        languageChanged: Boolean(restored.languageChanged),
+        mode: String(restored.mode || "conversation")
+      } : {})
+    };
     const previous = session.messages[session.messages.length - 1];
     if (content && (!previous || previous.role !== message.role || previous.content !== content)) session.messages.push(message);
     session.updatedAt = Math.max(session.updatedAt, Date.parse(row.created_at) || 0);
@@ -278,11 +298,36 @@ function isReferenceFollowUp(question) {
   return /\b(?:repeat|say that again|read that again|quote that again|same passage|revisit that passage)\b/i.test(question);
 }
 
+function parseStoredResponse(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function legacyVersesFromContent(content, translation) {
+  return String(content || "").split(/\s+\|\s+/).map((segment) => {
+    const match = segment.match(/^(.+?\s+\d+:\d+(?:[-–]\d+)?)\s*:\s*(.+)$/);
+    if (!match) return null;
+    const reference = String(match[1] || "").trim();
+    const fragment = String(match[2] || "").trim();
+    return reference && fragment ? { reference, fragment, text: fragment, translation } : null;
+  }).filter(Boolean);
+}
+
+function responseForHistory(message, fallbackTranslation) {
+  if (message?.response && typeof message.response === "object") return JSON.stringify(message.response);
+  return "";
+}
+
 async function recordRequest(env, id, accountId, sessionId, translation, messages, plus, profileMemory) {
   if (!env.BIBLE_DB) return;
   const timestamp = now();
   await env.BIBLE_DB.prepare("INSERT INTO users (device_id, created_at, updated_at, translation, plus, memory_text) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET updated_at=excluded.updated_at, translation=excluded.translation, plus=excluded.plus, memory_text=CASE WHEN excluded.memory_text <> '' THEN excluded.memory_text ELSE users.memory_text END").bind(id, timestamp, timestamp, translation, plus ? 1 : 0, String(profileMemory || "").slice(0, 3200)).run();
-  for (const message of messages.slice(-2)) await env.BIBLE_DB.prepare("INSERT INTO chats (device_id, account_id, session_id, role, content, translation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, accountId || null, sessionId, message.role, message.content, translation, timestamp).run();
+  for (const message of messages.slice(-2)) await env.BIBLE_DB.prepare("INSERT INTO chats (device_id, account_id, session_id, role, content, response_json, translation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, accountId || null, sessionId, message.role, message.content, responseForHistory(message, translation), translation, timestamp).run();
 }
 
 async function chat(request, env, input) {
@@ -303,7 +348,15 @@ async function chat(request, env, input) {
     if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
     const statusNote = explicitRequest.kind !== "single" ? rangeStatusNote(inputLanguage, resolved.length, requestedReferences.length) : "";
     const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(usageId, today).first())?.count || 0) + 1 : 0;
-    if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run(); await recordRequest(env, id, current.account?.id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
+    if (env.BIBLE_DB) {
+      await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run();
+      const assistant = {
+        role: "assistant",
+        content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | "),
+        response: { mode: "conversation", answer: "", verses, status: "", statusNote, safety: safetyConcern ? { type: "crisis", message: SAFETY_NOTE } : null, translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', detectedLanguage: inputLanguage, languageChanged: inputLanguage !== language }
+      };
+      await recordRequest(env, id, current.account?.id, sessionId, translation, [...messages, assistant], plus, profileMemory);
+    }
     return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", safety: safetyConcern ? { type: "crisis", message: SAFETY_NOTE } : null, translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
   }
   const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the explicitly requested preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Do not reuse any reference from the last 10 messages unless the user explicitly asks for that passage by reference. Choose fresh, relevant references instead: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
@@ -351,11 +404,19 @@ async function chat(request, env, input) {
   }
   if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env, inputLanguage));
   if (translation === 'twb') verses = await translateWayVerses(verses, inputLanguage, { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_TRANSLATION_MODEL || 'openai/gpt-4.1-mini', referer: env.OPENROUTER_SITE_URL || 'https://thewayversion.com', title: env.OPENROUTER_SITE_NAME || 'Talk To The Bible' });
-  const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(usageId, today).first())?.count || 0) + 1 : 0;
-  if (env.BIBLE_DB) { await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run(); await recordRequest(env, id, current.account?.id, sessionId, translation, [...messages, { role: "assistant", content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | ") }], plus, profileMemory); }
   const mode = contested || generated.mode === "fact" ? "fact" : "conversation";
   const status = contested ? "Biblical status: Disputed interpretation" : mode === "fact" ? (generated.status || "Biblical status: Not specified in Scripture") : "";
   const statusNote = contested ? contested.statusNote : mode === "fact" ? generated.statusNote : "";
+  const count = env.BIBLE_DB ? Number((await env.BIBLE_DB.prepare("SELECT count FROM daily_usage WHERE device_id = ? AND day = ?").bind(usageId, today).first())?.count || 0) + 1 : 0;
+  if (env.BIBLE_DB) {
+    await env.BIBLE_DB.prepare("INSERT INTO daily_usage (device_id, day, count) VALUES (?, ?, 1) ON CONFLICT(device_id, day) DO UPDATE SET count = count + 1").bind(usageId, today).run();
+    const assistant = {
+      role: "assistant",
+      content: verses.map((verse) => `${verse.reference}: ${verse.fragment}`).join(" | "),
+      response: { mode, answer: "", verses, status, statusNote, safety: safetyConcern ? { type: "crisis", message: SAFETY_NOTE } : null, translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', detectedLanguage: inputLanguage, languageChanged: inputLanguage !== language }
+    };
+    await recordRequest(env, id, current.account?.id, sessionId, translation, [...messages, assistant], plus, profileMemory);
+  }
   return respond(request, env, 200, { mode, answer: "", verses, status, statusNote, truthAnchor: mode === "fact" ? generated.truthAnchor : "", safety: safetyConcern ? { type: "crisis", message: SAFETY_NOTE } : null, translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: routed.model, detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
 }
 

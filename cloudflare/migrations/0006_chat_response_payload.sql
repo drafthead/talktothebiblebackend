@@ -1,0 +1,1 @@
+ALTER TABLE chats ADD COLUMN response_json TEXT NOT NULL DEFAULT '';

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS chats (
   session_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   content TEXT NOT NULL,
+  response_json TEXT NOT NULL DEFAULT '',
   translation TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
