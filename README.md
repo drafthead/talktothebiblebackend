@@ -112,7 +112,7 @@ current design deliberately does not cite profile context; only verified verse
 fragments appear in the answer. A future summarizer can update the profile
 asynchronously, but should never replace the exact recent turns.
 
-Anonymous web visitors receive the first three chats without an account. After
+Anonymous web visitors receive the first two answers without an account. After
 that preview, the web client requires an account and the Worker counts the free
 daily allowance against the account, so it is not reset simply by clearing a
 browser identifier. Free accounts receive 20 typed answers per day. Plus displays “Unlimited chats” and
