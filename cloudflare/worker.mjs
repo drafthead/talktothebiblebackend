@@ -15,7 +15,7 @@ const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 function cors(request, env) {
   const configured = String(env.ALLOWED_ORIGINS || "*").split(",").map((item) => item.trim()).filter(Boolean);
   const origin = request.headers.get("origin") || "";
-  return { ...jsonHeaders, "access-control-allow-headers": "content-type, x-anonymous-id, x-account-token, authorization", "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-origin": configured.includes("*") ? "*" : (configured.includes(origin) ? origin : configured[0] || "*"), "access-control-expose-headers": "x-account-token" };
+  return { ...jsonHeaders, "access-control-allow-headers": "content-type, x-anonymous-id, x-account-token, authorization", "access-control-allow-methods": "GET, POST, DELETE, OPTIONS", "access-control-allow-origin": configured.includes("*") ? "*" : (configured.includes(origin) ? origin : configured[0] || "*"), "access-control-expose-headers": "x-account-token" };
 }
 
 function respond(request, env, status, body) { return new Response(JSON.stringify(body), { status, headers: cors(request, env) }); }
@@ -107,6 +107,46 @@ async function authSession(request, env, input) {
 async function logoutAccount(request, env, input) {
   const token = accountToken(request); if (token && env.BIBLE_DB) await env.BIBLE_DB.prepare("DELETE FROM account_sessions WHERE token_hash = ?").bind(await sha256(token)).run();
   return respond(request, env, 200, { ok: true });
+}
+async function deleteAccount(request, env, input) {
+  if (!env.BIBLE_DB) return respond(request, env, 503, { error: "Account storage is not configured yet." });
+  const current = await identity(request, env, input);
+  if (!current.account) return respond(request, env, 401, { error: "Sign in before deleting your account." });
+  const accountId = current.account.id;
+  const devices = await env.BIBLE_DB.prepare("SELECT device_id FROM account_devices WHERE account_id = ?").bind(accountId).all();
+  const deviceIds = [...new Set((devices.results || []).map((row) => String(row.device_id || "")).filter(Boolean))];
+  const subscription = await env.BIBLE_DB.prepare("SELECT * FROM web_subscriptions WHERE account_id = ? LIMIT 1").bind(accountId).first();
+  const activeSubscription = ["ACTIVE", "PENDING", "PAUSED"].includes(String(subscription?.status || "").toUpperCase());
+  if (activeSubscription && subscription?.square_subscription_id) {
+    if (!squareConfigured(env)) return respond(request, env, 503, { error: "Cancel your Plus subscription before deleting this account." });
+    const bridgeResponse = await fetch(`${String(env.KDROP_BILLING_BRIDGE_URL).replace(/\/$/, '')}/cancel`, { method: "POST", headers: { "content-type": "application/json", "x-talk-bible-secret": env.KDROP_BILLING_SECRET }, body: JSON.stringify({ subscription_id: subscription.square_subscription_id }) });
+    if (!bridgeResponse.ok) return respond(request, env, 502, { error: "Your Plus subscription could not be canceled, so the account was not deleted. Cancel the subscription in Settings and try again." });
+  }
+  const statements = [
+    env.BIBLE_DB.prepare("DELETE FROM chats WHERE account_id = ?").bind(accountId),
+    env.BIBLE_DB.prepare("DELETE FROM daily_usage WHERE device_id = ?").bind(`account:${accountId}`),
+    env.BIBLE_DB.prepare("DELETE FROM web_subscriptions WHERE account_id = ?").bind(accountId),
+    env.BIBLE_DB.prepare("DELETE FROM account_devices WHERE account_id = ?").bind(accountId),
+    env.BIBLE_DB.prepare("DELETE FROM account_sessions WHERE account_id = ?").bind(accountId),
+    env.BIBLE_DB.prepare("DELETE FROM accounts WHERE id = ?").bind(accountId),
+  ];
+  for (const deviceIdValue of deviceIds) {
+    statements.push(env.BIBLE_DB.prepare("DELETE FROM chats WHERE device_id = ? AND account_id IS NULL").bind(deviceIdValue));
+    statements.push(env.BIBLE_DB.prepare("DELETE FROM daily_usage WHERE device_id = ?").bind(deviceIdValue));
+    statements.push(env.BIBLE_DB.prepare("DELETE FROM users WHERE device_id = ?").bind(deviceIdValue));
+  }
+  await env.BIBLE_DB.batch(statements);
+  return respond(request, env, 200, { ok: true, deleted: true });
+}
+async function accountDeletionRequest(request, env, input) {
+  if (!env.BIBLE_DB) return respond(request, env, 503, { error: "Account deletion requests are temporarily unavailable." });
+  const email = String(input?.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return respond(request, env, 400, { error: "Enter a valid account email address." });
+  const platform = String(input?.platform || "android").trim().slice(0, 40) || "android";
+  const note = String(input?.note || "").trim().slice(0, 1000);
+  const requestId = `del_${randomToken().slice(0, 22)}`;
+  await env.BIBLE_DB.prepare("INSERT INTO account_deletion_requests(id,email,platform,note,status,requested_at,completed_at) VALUES (?,?,?,?,?,?,NULL)").bind(requestId, email, platform, note, "received", now()).run();
+  return respond(request, env, 202, { ok: true, requestId, message: "Your request was received. Your account data will be permanently deleted within 90 days." });
 }
 async function enableTestPremium(request, env, input) {
   if (!env.BIBLE_DB || !env.TEST_PREMIUM_CODE || String(input?.code || "") !== String(env.TEST_PREMIUM_CODE)) return respond(request, env, 403, { error: "That testing code is not available." });
@@ -333,6 +373,8 @@ export default {
     if (request.method === "POST" && url.pathname === "/api/auth/register") return registerAccount(request, env, input || {});
     if (request.method === "POST" && url.pathname === "/api/auth/login") return loginAccount(request, env, input || {});
     if (request.method === "POST" && url.pathname === "/api/auth/logout") return logoutAccount(request, env, input || {});
+    if (request.method === "DELETE" && url.pathname === "/api/auth/account") return deleteAccount(request, env, input || {});
+    if (request.method === "POST" && url.pathname === "/api/account-deletion-request") return accountDeletionRequest(request, env, input || {});
     if (request.method === "POST" && url.pathname === "/api/auth/test-premium") return enableTestPremium(request, env, input || {});
     if (request.method === "GET" && url.pathname === "/api/auth/chats") return accountChats(request, env, { device_id: url.searchParams.get("device_id") });
     if (request.method === "GET" && url.pathname === "/api/billing/subscription") return billingStatus(request, env, { device_id: url.searchParams.get("device_id") });
