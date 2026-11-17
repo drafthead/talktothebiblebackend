@@ -20,6 +20,15 @@ test('normalizes accented Spanish before comparing language vocabularies', () =>
   assert.equal(detectLanguage('Como posso praticar esse valor hoje?', 'en-US'), 'pt');
 });
 
+test('does not mistake an English sentence containing an Italian lookalike for Italian', () => {
+  assert.equal(detectLanguage("So when it come to beauty products you're saying target rich people", 'en-US'), 'en-US');
+});
+
+test('still detects clear short messages in another Latin-script language', () => {
+  assert.equal(detectLanguage('Grazie, sono felice', 'en-US'), 'it');
+  assert.equal(detectLanguage('Hola, ¿cómo estás?', 'en-US'), 'es');
+});
+
 test('recognizes explicit verse counts and greeting exceptions', () => {
   assert.equal(requestedVerseCount('Give me five scriptures about Jesus'), 5);
   assert.equal(requestedVerseCount('Show me 20 verses about courage'), 20);
