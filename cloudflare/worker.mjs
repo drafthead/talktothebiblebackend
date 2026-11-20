@@ -272,7 +272,7 @@ async function enrich(verses, translation, env, language = 'en-US') {
   return (await Promise.all(items.map(async (item) => { const reference = String(item?.reference || "").trim(); const resolved = await resolveVerse(reference, translation, env, language); const selectedText = item?.fragment || item?.text || ""; return resolved ? { ...resolved, fragment: String(selectedText).trim().slice(0, 500), note: "" } : null; }))).filter(Boolean);
 }
 function modelContent(content) { if (content && typeof content === "object") return content; const text = String(content || "{}").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim(); try { return JSON.parse(text); } catch { return {}; } }
-function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 119:105", "Proverbs 3:5", "Matthew 11:28", "Philippians 4:6", "Joshua 1:9", "Romans 8:28"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
+function fallbackReference(recentReferencesSet) { const candidates = ["Psalm 23:4", "Psalm 27:1", "Psalm 34:18", "Psalm 46:1", "Psalm 121:1", "Proverbs 16:3", "Proverbs 18:10", "Isaiah 43:2", "Isaiah 58:11", "Matthew 5:4", "Matthew 11:28", "Mark 4:39", "Luke 10:41", "John 14:27", "Romans 12:12", "2 Corinthians 1:4", "Galatians 6:2", "Philippians 4:6", "Hebrews 4:16", "1 Peter 5:7"]; return candidates.find((reference) => !recentReferencesSet.has(reference.toLowerCase())) || candidates[0]; }
 function rangeStatusNote(language, available, requested) {
   if (available >= requested) return "";
   if (available === 0) {
@@ -323,6 +323,19 @@ function responseForHistory(message, fallbackTranslation) {
   return "";
 }
 
+async function storedRecentReferences(env, deviceIdValue, accountId, maxReferences = 50) {
+  if (!env.BIBLE_DB || maxReferences <= 0) return new Set();
+  const rows = accountId
+    ? await env.BIBLE_DB.prepare("SELECT role, response_json, content FROM chats WHERE role = 'assistant' AND (account_id = ? OR device_id = ?) ORDER BY created_at DESC, id DESC LIMIT 300").bind(accountId, deviceIdValue).all()
+    : await env.BIBLE_DB.prepare("SELECT role, response_json, content FROM chats WHERE role = 'assistant' AND device_id = ? ORDER BY created_at DESC, id DESC LIMIT 300").bind(deviceIdValue).all();
+  return recentReferences(rows.results || [], { limit: rows.results?.length || 0, maxReferences });
+}
+
+function removeBlockedReferences(verses, blockedReferences) {
+  if (!blockedReferences?.size) return Array.isArray(verses) ? verses : [];
+  return (Array.isArray(verses) ? verses : []).filter((verse) => !blockedReferences.has(canonicalReference(verse?.reference).toLowerCase()));
+}
+
 async function recordRequest(env, id, accountId, sessionId, translation, messages, plus, profileMemory) {
   if (!env.BIBLE_DB) return;
   const timestamp = now();
@@ -339,7 +352,9 @@ async function chat(request, env, input) {
   const { memory, recent } = compactConversation(messages, [profileMemory, input.summary || ""].filter(Boolean).join("\n")); const model = env.OPENROUTER_MODEL || "openai/gpt-4.1"; const fallbackModel = env.OPENROUTER_FALLBACK_MODEL || "openai/gpt-4.1-mini";
   const language = String(input.language || "en-US").slice(0, 12);
   const question = String(messages.at(-1)?.content || "").trim(); const inputLanguage = detectLanguage(question, language); const safetyConcern = detectSafetyConcern(question); const contested = contestedTopic(question);
-  const recentRefSet = recentReferences(messages);
+  const currentRefSet = recentReferences(messages, { limit: 50, maxReferences: 50 });
+  const storedRefSet = await storedRecentReferences(env, id, current.account?.id, Math.max(0, 50 - currentRefSet.size));
+  const recentRefSet = new Set([...currentRefSet, ...storedRefSet]);
   const explicitRequest = parseExplicitVerseRequest(question);
   if (explicitRequest) {
     const requestedReferences = referencesForVerseRequest(explicitRequest);
@@ -359,7 +374,7 @@ async function chat(request, env, input) {
     }
     return respond(request, env, 200, { mode: "conversation", answer: "", verses, status: "", statusNote, truthAnchor: "", safety: safetyConcern ? { type: "crisis", message: SAFETY_NOTE } : null, translation, sourceLabel: verses[0]?.sourceLabel || (translation === 'twb' ? 'The Way Version' : 'King James Version'), sourceAttribution: verses[0]?.sourceAttribution || '', model: "direct-verse-lookup", detectedLanguage: inputLanguage, detectedLanguageLabel: languageLabel(inputLanguage), languageChanged: inputLanguage !== language, remaining: plus ? null : Math.max(0, limit - (count || 1)), plus });
   }
-  const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the explicitly requested preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Do not reuse any reference from the last 10 messages unless the user explicitly asks for that passage by reference. Choose fresh, relevant references instead: ${[...recentRefSet].join(", ")}.` : "There are no prior references to avoid.";
+  const repeatRule = isReferenceFollowUp(question) ? "A follow-up may revisit the explicitly requested preceding passage when needed, but still do not duplicate an identical fragment." : recentRefSet.size ? `Do not reuse any reference from the user's previous 50 non-explicit answers across this device or account. Choose fresh, relevant references instead. The references already used are: ${[...recentRefSet].join(", ")}. This freshness rule does not apply when the user explicitly requests a verse, passage, chapter, or range.` : "There are no prior references to avoid. Choose a passage that fits the user's actual concern.";
   const requestedCount = requestedVerseCount(question);
   const minimumVerseCount = requestedCount || (isGreetingQuestion(question) ? 1 : 2);
   const countRule = requestedCount
@@ -378,10 +393,7 @@ async function chat(request, env, input) {
   const upstream = routed.body;
   const generated = normalizeModelResponse(modelContent(upstream?.choices?.[0]?.message?.content)); const requestedMax = Math.min(20, Math.max(minimumVerseCount, question.length > 180 || /\b(and|also|several|ways|explain|compare|why|how)\b/i.test(question) ? 8 : 3)); let verses = verifyVerseMaterial(await enrich(generated.verses.slice(0, requestedMax), translation, env, inputLanguage));
   if (!safetyConcern) verses = preserveCompleteShortVerses(verses);
-  if (!isReferenceFollowUp(question) && recentRefSet.size) {
-    const fresh = verses.filter((verse) => !recentRefSet.has(verse.reference.toLowerCase()));
-    verses = fresh;
-  }
+  if (!isReferenceFollowUp(question)) verses = removeBlockedReferences(verses, recentRefSet);
   if (verses.length < minimumVerseCount && !isGreetingQuestion(question)) {
     const existingReferences = [...new Set([...recentRefSet, ...verses.map((verse) => verse.reference.toLowerCase())])].join(", ") || "none";
     const completionPayload = { ...payload, messages: [...payload.messages, { role: "system", content: "The previous draft was incomplete. Return a complete replacement list with at least " + minimumVerseCount + " distinct, relevant Bible references. Do not reuse these references unless the user explicitly requested that passage: " + existingReferences + ". Keep every item in the required JSON shape and use only verifiable Scripture." }] };
@@ -392,6 +404,7 @@ async function chat(request, env, input) {
       const additions = completionGenerated.verses.filter((verse) => !known.has(canonicalReference(verse.reference).toLowerCase()));
       const completed = verifyVerseMaterial([...verses, ...(await enrich(additions.slice(0, 20), translation, env, inputLanguage))], { maxSegments: 20 });
       verses = safetyConcern ? completed : preserveCompleteShortVerses(completed);
+      if (!isReferenceFollowUp(question)) verses = removeBlockedReferences(verses, recentRefSet);
     }
   }
   if (contested) {
@@ -400,6 +413,7 @@ async function chat(request, env, input) {
     if (missing.length) {
       const contextual = await enrich(missing.map((reference) => ({ reference })), translation, env, inputLanguage);
       verses = preserveCompleteShortVerses(verifyVerseMaterial([...verses, ...contextual], { maxSegments: 20 }));
+      if (!isReferenceFollowUp(question)) verses = removeBlockedReferences(verses, recentRefSet);
     }
   }
   if (!verses.length) verses = verifyVerseMaterial(await enrich([{ reference: fallbackReference(recentRefSet), fragment: "" }], translation, env, inputLanguage));

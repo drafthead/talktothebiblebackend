@@ -15,6 +15,7 @@ function collect(value, references) {
     collect(value.reference, references);
     collect(value.verses, references);
     collect(value.content, references);
+    collect(value.response_json, references);
     return;
   }
   const text = String(value);
@@ -24,14 +25,15 @@ function collect(value, references) {
   }
 }
 
-export function recentReferences(messages, { limit = 10 } = {}) {
+export function recentReferences(messages, { limit = 10, maxReferences = Infinity } = {}) {
   const references = new Set();
-  for (const message of (Array.isArray(messages) ? messages : []).slice(-limit)) {
+  for (const message of (Array.isArray(messages) ? messages : []).slice(-limit).reverse()) {
     if (message?.role !== 'assistant') continue;
     collect(message, references);
     if (typeof message?.content === 'string' && message.content.trim().startsWith('{')) {
       try { collect(JSON.parse(message.content), references); } catch { /* rendered text is still scanned above */ }
     }
+    if (references.size >= maxReferences) break;
   }
   return references;
 }

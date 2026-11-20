@@ -17,3 +17,16 @@ test('extracts structured and JSON assistant responses', () => {
   ]);
   assert.deepEqual([...references].sort(), ['john 3:16', 'romans 8:28']);
 });
+
+test('supports a cross-chat freshness window of fifty references', () => {
+  const messages = Array.from({ length: 55 }, (_, index) => ({
+    role: 'assistant',
+    response_json: JSON.stringify({ verses: [{ reference: `Psalm ${index + 1}:1` }] }),
+    content: `Psalm ${index + 1}:1: A verse`,
+  }));
+  const references = recentReferences(messages, { limit: 300, maxReferences: 50 });
+  assert.equal(references.size, 50);
+  assert.equal(references.has('psalms 5:1'), false);
+  assert.equal(references.has('psalms 6:1'), true);
+  assert.equal(references.has('psalms 55:1'), true);
+});

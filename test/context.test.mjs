@@ -62,3 +62,10 @@ test("passes the selected interface language into the Bible response instruction
   assert.match(prompt, /Write statusNote and truthAnchor in Korean/);
   assert.match(prompt, /Bible fragments must remain exact verified text/);
 });
+
+test("guides the model toward empathetic, specific, non-dogmatic passages", () => {
+  const prompt = promptForTranslation("kjv", "en-US");
+  assert.match(prompt, /emotional shape and practical need/i);
+  assert.match(prompt, /relevant stories, prayers, lament, wisdom/i);
+  assert.match(prompt, /previous 50 non-explicit answers/i);
+});
