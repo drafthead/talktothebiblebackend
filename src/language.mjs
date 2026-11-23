@@ -29,6 +29,20 @@ const DISTINCTIVE_WORDS = {
   en: ['hello', 'hi', 'thanks', 'please', 'what', 'how', 'why', 'where', 'the', 'and', 'is', 'are', 'you', 'your', 'with'],
 };
 
+// A language selected in Settings is the default. Latin-script detection must
+// earn the right to override it: common words such as "a", "de", or "la"
+// are shared by many languages and should never flip an English conversation
+// into Portuguese, Spanish, or another language.
+const SINGLE_WORD_LANGUAGE_MARKERS = {
+  es: ['hola', 'gracias', 'necesito', 'quiero', 'estoy'],
+  pt: ['ola', 'obrigado', 'obrigada', 'preciso', 'estou', 'voce'],
+  fr: ['bonjour', 'merci', 'pourquoi'],
+  de: ['hallo', 'danke', 'brauche'],
+  it: ['ciao', 'grazie', 'voglio'],
+  nl: ['dank', 'nodig'],
+  en: ['hello', 'thanks', 'please', 'need', 'help'],
+};
+
 export const languageLabel = (language) => LANGUAGE_LABELS[language] || LANGUAGE_LABELS['en-US'];
 
 function normalizeToken(value) {
@@ -49,12 +63,13 @@ export function detectLanguage(text, fallback = 'en-US') {
   const distinctiveRanked = Object.entries(distinctiveScores).sort((a, b) => b[1] - a[1]);
   const [distinctiveWinner, distinctiveScore] = distinctiveRanked[0];
   const distinctiveRunnerUp = distinctiveRanked[1]?.[1] || 0;
-  if (distinctiveScore > 0 && distinctiveScore > distinctiveRunnerUp) return distinctiveWinner === 'en' ? 'en-US' : distinctiveWinner;
+  const hasSingleWordMarker = words.some((word) => SINGLE_WORD_LANGUAGE_MARKERS[distinctiveWinner]?.includes(word));
+  if (distinctiveScore > distinctiveRunnerUp && (distinctiveScore >= 2 || hasSingleWordMarker)) return distinctiveWinner === 'en' ? 'en-US' : distinctiveWinner;
   const scores = Object.fromEntries(Object.keys(WORDS).map((key) => [key, 0]));
   for (const word of words) for (const [language, vocabulary] of Object.entries(WORDS)) if (vocabulary.some((entry) => normalizeToken(entry) === word)) scores[language] += 1;
   const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const [winner, score] = ranked[0];
   const runnerUp = ranked[1]?.[1] || 0;
-  if (score < 1 || score === runnerUp) return fallback;
+  if (score < 3 || score <= runnerUp + 1) return fallback;
   return winner === 'en' ? 'en-US' : winner;
 }

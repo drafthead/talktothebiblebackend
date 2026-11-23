@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { requestOpenRouter } from '../src/openrouter.mjs';
 import { isGreetingQuestion, parseExplicitVerseRequest, referencesForVerseRequest, requestedVerseCount } from '../src/verse-request.mjs';
 import { detectLanguage } from '../src/language.mjs';
+import { lifeGuidance } from '../src/life-guidance.mjs';
 
 test('expands explicit ranges and chapters without silently truncating at two verses', () => {
   const range = parseExplicitVerseRequest('Psalms 1:5 to 10');
@@ -15,6 +16,14 @@ test('expands explicit ranges and chapters without silently truncating at two ve
   assert.deepEqual(referencesForVerseRequest(parseExplicitVerseRequest('Salmos 1:5 hasta 10')), ['Psalms 1:5', 'Psalms 1:6', 'Psalms 1:7', 'Psalms 1:8', 'Psalms 1:9', 'Psalms 1:10']);
 });
 
+test('continues from abbreviated references instead of returning the preceding verse or an empty card', () => {
+  assert.deepEqual(parseExplicitVerseRequest('After Eccl 7:14 I mean'), { book: 'Ecclesiastes', chapter: 7, start: 15, end: 15, kind: 'following' });
+  assert.deepEqual(parseExplicitVerseRequest('What comes after that?', [
+    { role: 'assistant', content: 'Ecclesiastes 7:14: In the day of prosperity be joyful.' },
+    { role: 'user', content: 'What comes after that?' },
+  ]), { book: 'Ecclesiastes', chapter: 7, start: 15, end: 15, kind: 'following' });
+});
+
 test('normalizes accented Spanish before comparing language vocabularies', () => {
   assert.equal(detectLanguage('¿Cómo puedo practicar ese valor hoy?', 'es'), 'es');
   assert.equal(detectLanguage('Como posso praticar esse valor hoje?', 'en-US'), 'pt');
@@ -22,11 +31,21 @@ test('normalizes accented Spanish before comparing language vocabularies', () =>
 
 test('does not mistake an English sentence containing an Italian lookalike for Italian', () => {
   assert.equal(detectLanguage("So when it come to beauty products you're saying target rich people", 'en-US'), 'en-US');
+  assert.equal(detectLanguage('Ok need a verse about trying new things', 'en-US'), 'en-US');
 });
 
 test('still detects clear short messages in another Latin-script language', () => {
   assert.equal(detectLanguage('Grazie, sono felice', 'en-US'), 'it');
   assert.equal(detectLanguage('Hola, ¿cómo estás?', 'en-US'), 'es');
+});
+
+test('adds semantic guidance for life questions instead of matching a single word', () => {
+  const change = lifeGuidance('I need a verse about trying something new, but I am scared to start.');
+  assert.match(change, /new beginning/i);
+  assert.match(change, /never default to "sing a new song"/i);
+  const relationship = lifeGuidance('I do not know how to repair this relationship with my friend.');
+  assert.match(relationship, /relationship or repair/i);
+  assert.match(relationship, /listening before speaking/i);
 });
 
 test('recognizes explicit verse counts and greeting exceptions', () => {

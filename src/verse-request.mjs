@@ -12,7 +12,7 @@ const BOOK_ALIASES = new Map(Object.entries({
   '1 chronicles': '1 Chronicles', '2 chronicles': '2 Chronicles', '1 crónicas': '1 Chronicles', '2 crónicas': '2 Chronicles',
   ezra: 'Ezra', esdras: 'Ezra', nehemiah: 'Nehemiah', nehemías: 'Nehemiah', nehemias: 'Nehemiah',
   esther: 'Esther', ester: 'Esther', job: 'Job', proverbs: 'Proverbs', proverbios: 'Proverbs',
-  ecclesiastes: 'Ecclesiastes', eclesiastés: 'Ecclesiastes', eclesiastes: 'Ecclesiastes',
+  ecclesiastes: 'Ecclesiastes', eccl: 'Ecclesiastes', ecc: 'Ecclesiastes', eclesiastés: 'Ecclesiastes', eclesiastes: 'Ecclesiastes',
   'song of songs': 'Song of Solomon', 'song of solomon': 'Song of Solomon', cantares: 'Song of Solomon',
   isaiah: 'Isaiah', isaías: 'Isaiah', isaias: 'Isaiah', jeremiah: 'Jeremiah', jeremías: 'Jeremiah', jeremias: 'Jeremiah',
   lamentations: 'Lamentations', lamentaciones: 'Lamentations', ezekiel: 'Ezekiel', ezequiel: 'Ezekiel', daniel: 'Daniel',
@@ -66,8 +66,37 @@ export function isGreetingQuestion(question) {
 
 // Explicit verse requests are deterministic: the model should not choose only
 // a couple of examples when the user asked for a passage or chapter range.
-export function parseExplicitVerseRequest(question) {
+function nextVerseRequest(match) {
+  if (!match) return null;
+  const book = cleanBook(match[1]);
+  const chapter = Number(match[2]);
+  const verse = Number(match[3]);
+  if (!book || !Number.isInteger(chapter) || !Number.isInteger(verse)) return null;
+  return { book, chapter, start: verse + 1, end: verse + 1, kind: 'following' };
+}
+
+function referenceFromRecentAssistant(messages) {
+  for (const message of [...(Array.isArray(messages) ? messages : [])].reverse()) {
+    if (message?.role !== 'assistant') continue;
+    const match = String(message.content || '').match(/\b((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\b/iu);
+    const request = nextVerseRequest(match);
+    if (request) return request;
+  }
+  return null;
+}
+
+export function parseExplicitVerseRequest(question, messages = []) {
   const text = stripRequestLead(question);
+  // "After Eccl 7:14" is a request to continue reading, not a topical
+  // question about the word "after". Resolve it before the ordinary single
+  // reference parser, which would otherwise return the preceding verse again.
+  const following = text.match(/\b(?:after|following|next(?:\s+verse)?|what\s+comes\s+after)\s+(?:the\s+)?(?:verse\s+)?((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\b/iu);
+  const directNext = nextVerseRequest(following);
+  if (directNext) return directNext;
+  if (/\b(?:after that|what comes next|what follows|the next verse)\b/i.test(text)) {
+    const contextualNext = referenceFromRecentAssistant(messages);
+    if (contextualNext) return contextualNext;
+  }
   const range = text.match(/\b((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\s*(?:-|–|—|\bto\b|\bthrough\b|\ba\b|\bhasta\b)\s*(?:(?:[1-3]\s+)?[\p{L}]+\s+)?(?:(\d+):)?(\d+)\b/iu);
   if (range) {
     const book = cleanBook(range[1]);

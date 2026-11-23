@@ -58,8 +58,9 @@ test("normalizes the spec response shape and fact status", () => {
 
 test("passes the selected interface language into the Bible response instructions", () => {
   const prompt = promptForTranslation("kjv", "ko");
-  assert.match(prompt, /Korean-speaking user/);
-  assert.match(prompt, /Write statusNote and truthAnchor in Korean/);
+  assert.match(prompt, /selected interface language is Korean/);
+  assert.match(prompt, /must never change the response language/i);
+  assert.match(prompt, /Always compose all non-quotation metadata, statusNote, and truthAnchor in Korean/);
   assert.match(prompt, /Bible fragments must remain exact verified text/);
 });
 
