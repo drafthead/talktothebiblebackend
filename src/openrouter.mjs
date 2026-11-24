@@ -1,6 +1,6 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-export async function requestOpenRouter({ apiKey, primaryModel, fallbackModel, payload, referer, title, fetchImpl = fetch, timeoutMs = 6000 }) {
+export async function requestOpenRouter({ apiKey, primaryModel, fallbackModel, payload, referer, title, fetchImpl = fetch, timeoutMs = 6000, validateResponse }) {
   const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
   for (const model of models) {
     const controller = new AbortController();
@@ -18,7 +18,16 @@ export async function requestOpenRouter({ apiKey, primaryModel, fallbackModel, p
         body: JSON.stringify({ ...payload, model }),
       });
       const body = await response.json().catch(() => ({}));
-      if (response.ok) return { body, model };
+      if (response.ok) {
+        if (typeof validateResponse === 'function' && !validateResponse(body)) {
+          // A successful HTTP response can still contain unusable model output,
+          // such as prose instead of the required JSON verse-selection shape.
+          // Treat that as a failed attempt so the next configured model gets a
+          // chance to produce a compatible response.
+          continue;
+        }
+        return { body, model };
+      }
     } catch {
       // A transient timeout/network failure should try the configured fallback.
     } finally {

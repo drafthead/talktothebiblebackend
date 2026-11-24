@@ -91,3 +91,19 @@ test('tries the fallback model when the primary exceeds the timeout', async () =
   assert.deepEqual(models, ['primary/model', 'fallback/model']);
   assert.equal(result.model, 'fallback/model');
 });
+
+test('tries the fallback model when the primary returns an incompatible response', async () => {
+  const models = [];
+  const result = await requestOpenRouter({
+    apiKey: 'test', primaryModel: 'primary/model', fallbackModel: 'fallback/model', payload: { messages: [] },
+    validateResponse: (body) => Array.isArray(body?.choices?.[0]?.message?.content?.verses) && body.choices[0].message.content.verses.length > 0,
+    fetchImpl: async (_url, options) => {
+      const model = JSON.parse(options.body).model;
+      models.push(model);
+      if (model === 'primary/model') return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'not JSON' } }] }) };
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: { verses: [{ reference: 'James 1:5' }] } } }] }) };
+    },
+  });
+  assert.deepEqual(models, ['primary/model', 'fallback/model']);
+  assert.equal(result.model, 'fallback/model');
+});
