@@ -24,12 +24,25 @@ export async function requestOpenRouter({ apiKey, primaryModel, fallbackModel, p
           // such as prose instead of the required JSON verse-selection shape.
           // Treat that as a failed attempt so the next configured model gets a
           // chance to produce a compatible response.
+          console.warn('[openrouter] rejected response shape', {
+            model,
+            status: response.status,
+            hasChoices: Array.isArray(body?.choices) && body.choices.length > 0,
+            contentType: typeof body?.choices?.[0]?.message?.content,
+          });
           continue;
         }
         return { body, model };
       }
-    } catch {
+      console.warn('[openrouter] provider response failed', {
+        model,
+        status: response.status,
+        code: body?.error?.code || body?.error?.type || '',
+        message: String(body?.error?.message || '').slice(0, 180),
+      });
+    } catch (error) {
       // A transient timeout/network failure should try the configured fallback.
+      console.warn('[openrouter] request failed', { model, error: error?.name || 'unknown' });
     } finally {
       clearTimeout(timer);
     }
