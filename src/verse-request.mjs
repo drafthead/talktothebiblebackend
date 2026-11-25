@@ -97,7 +97,10 @@ export function parseExplicitVerseRequest(question, messages = []) {
     const contextualNext = referenceFromRecentAssistant(messages);
     if (contextualNext) return contextualNext;
   }
-  const range = text.match(/\b((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\s*(?:-|–|—|\bto\b|\bthrough\b|\ba\b|\bhasta\b)\s*(?:(?:[1-3]\s+)?[\p{L}]+\s+)?(?:(\d+):)?(\d+)\b/iu);
+  // A reference embedded in a question is context, not necessarily a command
+  // to open that verse. Restrict direct lookup to a standalone passage request
+  // so “How does Acts 11:1 …?” remains a full-context question for the model.
+  const range = text.match(/^\s*((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\s*(?:-|–|—|\bto\b|\bthrough\b|\ba\b|\bhasta\b)\s*(?:(?:[1-3]\s+)?[\p{L}]+\s+)?(?:(\d+):)?(\d+)\s*[.!?]*\s*$/iu);
   if (range) {
     const book = cleanBook(range[1]);
     const chapter = Number(range[2]);
@@ -106,7 +109,7 @@ export function parseExplicitVerseRequest(question, messages = []) {
     const end = Number(range[5]);
     if (endChapter === chapter && end >= start) return { book, chapter, start, end: Math.min(end, start + 19), kind: 'range' };
   }
-  const single = text.match(/\b((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\b/iu);
+  const single = text.match(/^\s*((?:[1-3]\s+)?[\p{L}]+(?:\s+[\p{L}]+){0,2})\s+(\d+):(\d+)\s*[.!?]*\s*$/iu);
   if (single) return { book: cleanBook(single[1]), chapter: Number(single[2]), start: Number(single[3]), end: Number(single[3]), kind: 'single' };
   const chapter = text.match(/^(?:give me|show me|read|open)\s+((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+chapter\s+(\d+)\s*$/i)
     || text.match(/^((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+chapter\s+(\d+)\s*$/i)

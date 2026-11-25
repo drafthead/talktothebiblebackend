@@ -24,6 +24,14 @@ test('continues from abbreviated references instead of returning the preceding v
   ]), { book: 'Ecclesiastes', chapter: 7, start: 15, end: 15, kind: 'following' });
 });
 
+test('does not turn a discussion question mentioning a verse into an invalid direct lookup', () => {
+  const discussion = `Discussion Questions
+1. What are your top lessons from Acts 11?
+2. How does Acts 11:1 reflect the theme of divine revelation?`;
+  assert.equal(parseExplicitVerseRequest(discussion), null);
+  assert.deepEqual(parseExplicitVerseRequest('Show me Acts 11:1'), { book: 'Acts', chapter: 11, start: 1, end: 1, kind: 'single' });
+});
+
 test('normalizes accented Spanish before comparing language vocabularies', () => {
   assert.equal(detectLanguage('¿Cómo puedo practicar ese valor hoy?', 'es'), 'es');
   assert.equal(detectLanguage('Como posso praticar esse valor hoje?', 'en-US'), 'pt');
